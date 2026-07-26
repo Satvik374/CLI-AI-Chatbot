@@ -1,0 +1,1063 @@
+﻿import chalk from 'chalk';
+import stripAnsi from 'strip-ansi';
+import boxen from 'boxen';
+import figures from 'figures';
+import Table from 'cli-table3';
+import { highlight } from 'cli-highlight';
+import path from 'path';
+import os from 'os';
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   ENHANCED COLOR SYSTEM â€” Claude Code inspired theme
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+const PALETTES = {
+  cool:       ['#C084FC','#A78BFA','#818CF8','#6366F1','#4F46E5','#3B82F6','#0EA5E9','#06B6D4','#14B8A6'],
+  blueTeal:   ['#60A5FA','#3B82F6','#0EA5E9','#06B6D4','#14B8A6','#10B981'],
+  purpleBlue: ['#E879F9','#C084FC','#A78BFA','#818CF8','#6366F1','#4F46E5','#3B82F6'],
+  neon:       ['#A78BFA','#C084FC','#E879F9','#F472B6','#FB7185'],
+  fire:       ['#FEF08A','#FDE047','#FACC15','#F59E0B','#F97316','#EF4444'],
+  warm:       ['#FDE68A','#FBBF24','#F59E0B','#EF4444','#EC4899','#D946EF','#A855F7'],
+  mint:       ['#6EE7B7','#34D399','#10B981','#059669'],
+  sunset:     ['#FCA5A5','#F87171','#EF4444','#DC2626','#B91C1C'],
+  ocean:      ['#7DD3FC','#38BDF8','#0EA5E9','#0284C7','#0369A1'],
+  aurora:     ['#22D3EE','#34D399','#A3E635','#FACC15','#FB7185','#E879F9'],
+  claude:     ['#F4A672','#E8895A','#D97757','#C9663F','#B85535','#A04428'],
+  ember:      ['#FFD27D','#FFA76A','#FF7E5F','#E85D52','#C94B4B'],
+  galaxy:     ['#312E81','#4338CA','#6D28D9','#A21CAF','#BE185D','#9F1239'],
+};
+
+export const t = {
+  // Brand
+  primary   : chalk.hex('#D97757'),   // Claude orange
+  secondary : chalk.hex('#A78BFA'),
+  accent    : chalk.hex('#06B6D4'),
+
+  // Semantic
+  success   : chalk.hex('#10B981'),
+  warning   : chalk.hex('#F59E0B'),
+  error     : chalk.hex('#EF4444'),
+  info      : chalk.hex('#3B82F6'),
+
+  // Text
+  text      : chalk.hex('#E5E7EB'),
+  muted     : chalk.hex('#6B7280'),
+  dim       : chalk.hex('#4B5563'),
+  subtle    : chalk.hex('#9CA3AF'),
+  bright    : chalk.hex('#F9FAFB'),
+
+  // Tools
+  tool      : chalk.hex('#A78BFA'),
+  toolName  : chalk.hex('#C084FC').bold,
+  param     : chalk.hex('#7DD3FC'),
+  paramVal  : chalk.hex('#FCD34D'),
+
+  // Code
+  codeBg    : chalk.bgHex('#1F2937'),
+  codeText  : chalk.hex('#E5E7EB'),
+  codeKw    : chalk.hex('#C084FC'),
+  codeStr   : chalk.hex('#86EFAC'),
+  codeNum   : chalk.hex('#FCD34D'),
+  codeCmt   : chalk.hex('#6B7280').italic,
+
+  // Diff
+  diffAdd   : chalk.hex('#10B981'),
+  diffDel   : chalk.hex('#EF4444'),
+  diffCtx   : chalk.hex('#6B7280'),
+
+  // UI chrome
+  border    : chalk.hex('#374151'),
+  borderHi  : chalk.hex('#D97757'),
+  user      : chalk.hex('#60A5FA').bold,
+  assistant : chalk.hex('#D97757').bold,
+
+  // Utility
+  bold      : chalk.bold,
+  highlight : chalk.hex('#FBBF24'),
+  faint     : chalk.hex('#374151'),
+  code      : chalk.hex('#E5E7EB'),
+
+  // Badges
+  userBadge : (s) => chalk.bgHex('#1E3A5F').hex('#BFDBFE').bold(` ${s} `),
+  aiBadge   : (s) => chalk.bgHex('#3B1F0B').hex('#FED7AA').bold(` ${s} `),
+  okBadge   : (s) => chalk.bgHex('#064E3B').hex('#A7F3D0').bold(` ${s} `),
+  warnBadge : (s) => chalk.bgHex('#78350F').hex('#FDE68A').bold(` ${s} `),
+  errBadge  : (s) => chalk.bgHex('#7F1D1D').hex('#FECACA').bold(` ${s} `),
+  infoBadge : (s) => chalk.bgHex('#1E3A8A').hex('#BFDBFE').bold(` ${s} `),
+};
+
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Gradient utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+function hexToRgb(hex) {
+  const h = hex.replace('#','');
+  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+}
+function rgbToHex([r,g,b]) {
+  const s = n => n.toString(16).padStart(2,'0');
+  return '#' + s(r) + s(g) + s(b);
+}
+function lerpColor(a, b, t) {
+  const A = hexToRgb(a), B = hexToRgb(b);
+  return rgbToHex([
+    Math.round(A[0] + (B[0]-A[0])*t),
+    Math.round(A[1] + (B[1]-A[1])*t),
+    Math.round(A[2] + (B[2]-A[2])*t),
+  ]);
+}
+
+export function gradientText(text, paletteName = 'purpleBlue') {
+  const pal = PALETTES[paletteName] || PALETTES.purpleBlue;
+  const chars = [...text];
+  if (chars.length <= 1) return chalk.hex(pal[0])(text);
+  return chars.map((c, i) => {
+    if (c === ' ' || c === '\n') return c;
+    const pos = (i / (chars.length - 1)) * (pal.length - 1);
+    const lo  = Math.floor(pos);
+    const hi  = Math.min(lo + 1, pal.length - 1);
+    const col = lerpColor(pal[lo], pal[hi], pos - lo);
+    return chalk.hex(col)(c);
+  }).join('');
+}
+
+export function gradientLine(width, palette = 'purpleBlue', char = 'â”€') {
+  return gradientText(char.repeat(width), palette);
+}
+
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Terminal width helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+export function termWidth() {
+  return Math.max(40, Math.min(process.stdout.columns || 100, 140));
+}
+
+function visibleLen(s) { return stripAnsi(s).length; }
+
+function padCenter(text, width) {
+  const len = visibleLen(text);
+  if (len >= width) return text;
+  const total = width - len;
+  const left  = Math.floor(total / 2);
+  return ' '.repeat(left) + text + ' '.repeat(total - left);
+}
+
+function padRight(text, width) {
+  const len = visibleLen(text);
+  if (len >= width) return text;
+  return text + ' '.repeat(width - len);
+}
+
+function truncate(s, max) {
+  if (visibleLen(s) <= max) return s;
+  return s.slice(0, max - 1) + 'â€¦';
+}
+
+function wrapText(text, width) {
+  const out = [];
+  for (const para of text.split('\n')) {
+    if (!para) { out.push(''); continue; }
+    let line = '';
+    for (const word of para.split(' ')) {
+      if (visibleLen(line + (line ? ' ' : '') + word) > width) {
+        if (line) out.push(line);
+        line = word;
+      } else {
+        line = line ? line + ' ' + word : word;
+      }
+    }
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+function shortenPath(p, max = 50) {
+  if (!p) return '';
+  const home = os.homedir();
+  let s = p.startsWith(home) ? '~' + p.slice(home.length) : p;
+  s = s.replace(/\\/g, '/');
+  if (s.length <= max) return s;
+  const parts = s.split('/');
+  if (parts.length <= 3) return 'â€¦' + s.slice(-(max - 1));
+  return parts[0] + '/â€¦/' + parts.slice(-2).join('/');
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   BANNER & SESSION INFO
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+const LOGO = [
+'  â–ˆâ–ˆâ–ˆâ•—   â–ˆâ–ˆâ–ˆâ•— â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•— â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•— â–ˆâ–ˆâ•—  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•— â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•— ',
+'  â–ˆâ–ˆâ–ˆâ–ˆâ•— â–ˆâ–ˆâ–ˆâ–ˆâ•‘â–ˆâ–ˆâ•”â•â•â•â–ˆâ–ˆâ•—â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•—â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•—â–ˆâ–ˆâ•‘  â•šâ•â•â–ˆâ–ˆâ•”â•â•â•â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•—',
+'  â–ˆâ–ˆâ•”â–ˆâ–ˆâ–ˆâ–ˆâ•”â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•”â•â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘     â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•‘',
+'  â–ˆâ–ˆâ•‘â•šâ–ˆâ–ˆâ•”â•â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•—â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘     â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•”â•â•â–ˆâ–ˆâ•‘',
+'  â–ˆâ–ˆâ•‘ â•šâ•â• â–ˆâ–ˆâ•‘â•šâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•”â•â–ˆâ–ˆâ•‘  â–ˆâ–ˆâ•‘â–ˆâ–ˆâ•‘  â–ˆâ–ˆâ•‘â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ•—â–ˆâ–ˆâ•‘   â–ˆâ–ˆâ•‘  â–ˆâ–ˆâ•‘',
+'  â•šâ•â•     â•šâ•â• â•šâ•â•â•â•â•â• â•šâ•â•  â•šâ•â•â•šâ•â•  â•šâ•â•â•šâ•â•â•â•â•â•â•â•šâ•â•   â•šâ•â•  â•šâ•â•',
+];
+
+const COMPACT_LOGO = [
+'  â•­â”€â•®â•­â”€â•®â•­â”€â•®â•­â”€â•®â•­â”€â•®â•­â•® â•­â”€â•®â•­â”€â•®',
+'  â”‚â”‚â”‚â”‚â”‚ â”‚â”‚â”¬â•¯â”œâ”€â”¤â”‚ â”‚ â”‚ â”œâ”€â”¤',
+'  â•µ â•µâ•°â”€â•¯â•µ â•µâ•µ â•µâ•°â”€â•¯ â•µ â•µ â•µ',
+];
+
+export function renderBanner({ version = '3.0.0', tagline = 'AI Coding Assistant' } = {}) {
+  const w = termWidth();
+  console.log();
+
+  const useCompact = w < 70;
+  const logo = useCompact ? COMPACT_LOGO : LOGO;
+  for (const line of logo) console.log(gradientText(line, 'claude'));
+
+  // Sub-line: sparkle  Â·  tagline  Â·  Powered by Claude  Â·  vX
+  const dot   = t.dim('â€¢');
+  const spark = chalk.hex('#FBBF24')('âœ¦');
+  const sub = `   ${spark}  ${t.subtle(tagline)}  ${dot}  ${t.muted('Powered by')} ${chalk.hex('#D97757').bold('Claude')}  ${dot}  ${t.dim('v' + version)}`;
+  console.log(sub);
+
+  // Decorative shimmer divider just under the logo
+  const lineW = Math.min(w - 4, 64);
+  console.log('  ' + gradientLine(lineW, 'claude', 'â”'));
+  console.log();
+}
+
+export function renderSessionInfo(opts = {}) {
+  const {
+    model = 'unknown',
+    cwd = process.cwd(),
+    apiFormat,
+    format,                    // alias
+    baseUrl,
+    autoApprove = false,
+    sessionId = 'â€”',
+  } = opts;
+
+  const fmt = apiFormat || format || 'anthropic';
+  const w   = termWidth();
+  const boxW = Math.min(w - 4, 78);
+
+  const modeLabel = autoApprove
+    ? chalk.bgHex('#78350F').hex('#FDE68A').bold(' AUTO ') + ' ' + t.warning('approve all')
+    : chalk.bgHex('#064E3B').hex('#A7F3D0').bold(' SAFE ') + ' ' + t.success('confirm each');
+
+  const dot = (color) => chalk.hex(color)('â—');
+
+  // Two-column layout (label : value) using fixed key column width
+  const rows = [
+    [`${dot('#D97757')} Model`,     t.bright(model)],
+    [`${dot('#A78BFA')} API`,       t.bright(fmt) + (baseUrl ? t.dim('  â†’  ' + truncate(baseUrl, boxW - 28)) : '')],
+    [`${dot('#06B6D4')} Workspace`, t.bright(shortenPath(cwd, boxW - 18))],
+    [`${dot('#FBBF24')} Mode`,      modeLabel],
+    [`${dot('#10B981')} Session`,   t.dim(sessionId)],
+  ];
+
+  const keyW = Math.max(...rows.map(([k]) => visibleLen(k)));
+  const lines = rows.map(([k, v]) => `${padRight(t.muted(k), keyW + 6)}${v}`);
+
+  const box = boxen(lines.join('\n'), {
+    padding: { top: 0, bottom: 0, left: 2, right: 2 },
+    margin:  { top: 0, bottom: 0, left: 2, right: 0 },
+    borderStyle: 'round',
+    borderColor: '#D97757',
+    title: chalk.hex('#D97757').bold('â—† Session'),
+    titleAlignment: 'left',
+    width: boxW,
+  });
+  console.log(box);
+}
+
+/** Render the compact help footer shown after the session card */
+export function renderHelpFooter() {
+  const w = termWidth();
+  const boxW = Math.min(w - 4, 78);
+  const kbd = (k) => chalk.bgHex('#1F2937').hex('#E5E7EB').bold(` ${k} `);
+
+  const tips = [
+    `${kbd('/help')}  show all commands         ${kbd('/cost')}   token usage`,
+    `${kbd('/auto')}  toggle auto-approve       ${kbd('/clear')}  reset chat`,
+    `${kbd('Ctrl+C')} cancel current request    ${kbd('\\')}      multi-line input`,
+  ];
+
+  const box = boxen(tips.join('\n'), {
+    padding: { top: 0, bottom: 0, left: 2, right: 2 },
+    margin:  { top: 0, bottom: 1, left: 2, right: 0 },
+    borderStyle: 'round',
+    borderColor: '#374151',
+    title: chalk.hex('#A78BFA').bold('âœ¦ Quick Tips'),
+    titleAlignment: 'left',
+    width: boxW,
+  });
+  console.log(box);
+}
+
+export function renderDivider(palette = 'claude') {
+  const w = termWidth() - 4;
+  console.log('  ' + gradientLine(w, palette));
+}
+
+export function renderTip(text) {
+  if (!text) {
+    text = `Type ${t.accent('/help')} to see commands, or just describe what you want to build.`;
+  }
+  console.log(`  ${chalk.hex('#FBBF24')('âœ¦')} ${t.muted(text)}`);
+}
+
+export function renderSuccess(text) {
+  console.log(`  ${t.success(figures.tick)} ${t.text(text)}`);
+}
+
+export function renderError(text) {
+  console.log(`  ${t.errBadge('ERROR')} ${t.error(text)}`);
+}
+
+export function renderWarning(text) {
+  console.log(`  ${t.warning(figures.warning)} ${t.warning(text)}`);
+}
+
+export function renderInfo(text) {
+  console.log(`  ${t.info(figures.info)} ${t.text(text)}`);
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   PROMPT PREFIX
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+/**
+ * A two-line shell-style prompt:
+ *   â•­â”€ ~/path/to/project â”€ main
+ *   â•°â”€â¯
+ */
+export function renderPromptHeader() {
+  const cwd = shortenPath(process.cwd(), 60);
+  const arrow = chalk.hex('#D97757')('â”€');
+  const pathSeg = chalk.hex('#A78BFA')(cwd);
+  console.log(`  ${chalk.hex('#D97757')('â•­â”€')} ${pathSeg} ${arrow}${arrow}`);
+}
+
+export function getPromptPrefix() {
+  return `  ${chalk.hex('#D97757')('â•°â”€')}${chalk.hex('#C084FC').bold('â¯')} `;
+}
+
+export function renderUserMessage(text) {
+  console.log(`  ${t.userBadge('YOU')} ${t.text(text)}`);
+}
+
+export function renderAssistantHeader() {
+  const dot   = chalk.hex('#D97757')('â—');
+  const label = gradientText('Moralta', 'claude');
+  const time  = t.dim(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+  console.log(`\n  ${dot} ${chalk.bold(label)} ${t.dim('Â·')} ${time}`);
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   TOOL CALL / RESULT RENDERING
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+const TOOL_ICONS = {
+  read_file:       'ðŸ“–',
+  write_file:      'ðŸ“',
+  edit_file:       'âœï¸ ',
+  run_command:     'âš¡',
+  search_files:    'ðŸ”',
+  list_directory:  'ðŸ“',
+  multi_edit:      'ðŸ”€',
+  append_file:     'âž•',
+  delete_file:     'ðŸ—‘ï¸ ',
+  move_file:       'âž¡ï¸ ',
+  copy_file:       'ðŸ“‹',
+  fetch_url:       'ðŸŒ',
+  find_files:      'ðŸ§­',
+  file_info:       'â„¹ï¸ ',
+  default:         'ðŸ”§',
+};
+
+const TOOL_VERBS = {
+  read_file:      'Reading',
+  write_file:     'Writing',
+  edit_file:      'Editing',
+  run_command:    'Executing',
+  search_files:   'Searching',
+  list_directory: 'Listing',
+  multi_edit:     'Editing',
+  append_file:    'Appending to',
+  delete_file:    'Deleting',
+  move_file:      'Moving',
+  copy_file:      'Copying',
+  fetch_url:      'Fetching',
+  find_files:     'Finding',
+  file_info:      'Inspecting',
+};
+
+function toolIcon(name) { return TOOL_ICONS[name] || TOOL_ICONS.default; }
+function toolVerb(name) { return TOOL_VERBS[name] || 'Running'; }
+
+/** Pull the most useful "target" out of input for a one-line summary */
+function toolTarget(name, input) {
+  if (!input || typeof input !== 'object') return '';
+  if (input.path)    return input.path;
+  if (input.command) return input.command;
+  if (input.pattern) return input.pattern;
+  if (input.url)     return input.url;
+  if (input.from && input.to) return `${input.from} â†’ ${input.to}`;
+  return '';
+}
+
+// Track timing per tool call for nicer result lines
+const _toolTimers = new Map();
+let _toolCallCounter = 0;
+
+export function renderToolCall(name, input) {
+  const id    = ++_toolCallCounter;
+  _toolTimers.set(name + ':' + id, Date.now());
+
+  const icon   = toolIcon(name);
+  const verb   = toolVerb(name);
+  const target = toolTarget(name, input);
+  const w      = termWidth();
+  const boxW   = Math.min(w - 4, 96);
+
+  // Header line: icon  verb  target
+  const targetStr = target ? '  ' + chalk.hex('#FCD34D')(truncate(target, boxW - 24)) : '';
+  const head = `${icon} ${chalk.hex('#C084FC').bold(verb)} ${chalk.hex('#A78BFA')(name)}${targetStr}`;
+
+  const lines = [head];
+
+  // Render any "non-target" params underneath as â–¸ key: value
+  const extras = [];
+  if (input && typeof input === 'object') {
+    for (const [k, v] of Object.entries(input)) {
+      if (['path','command','pattern','url','from','to','content'].includes(k)) continue;
+      if (v === undefined || v === null) continue;
+      extras.push(`${t.dim('â–¸')} ${t.param(k)}${t.dim(':')} ${t.paramVal(_short(v))}`);
+    }
+    // Show content size separately
+    if (typeof input.content === 'string') {
+      const ln = input.content.split('\n').length;
+      extras.push(`${t.dim('â–¸')} ${t.param('content')}${t.dim(':')} ${t.paramVal(input.content.length + ' chars, ' + ln + ' lines')}`);
+    }
+    if (typeof input.new_text === 'string' || typeof input.old_text === 'string') {
+      const oldL = (input.old_text || '').split('\n').length;
+      const newL = (input.new_text || '').split('\n').length;
+      extras.push(`${t.dim('â–¸')} ${t.param('change')}${t.dim(':')} ${t.diffDel('-' + oldL)} ${t.diffAdd('+' + newL)} ${t.dim('lines')}`);
+    }
+  }
+  for (const e of extras) lines.push(e);
+
+  const body = lines.join('\n');
+  const box  = boxen(body, {
+    padding: { top: 0, bottom: 0, left: 1, right: 1 },
+    margin:  { top: 0, bottom: 0, left: 2, right: 0 },
+    borderStyle: 'round',
+    borderColor: '#6D28D9',
+    width: boxW,
+  });
+  console.log(box);
+
+  // Stash timer key on a tag so renderToolResult can pick it up
+  return id;
+}
+
+function _short(v) {
+  if (typeof v === 'string') return v.length > 60 ? JSON.stringify(v.slice(0, 57) + 'â€¦') : JSON.stringify(v);
+  if (typeof v === 'object') {
+    const s = JSON.stringify(v);
+    return s.length > 60 ? s.slice(0, 57) + 'â€¦' : s;
+  }
+  return String(v);
+}
+
+function formatParams(input) {
+  if (!input || typeof input !== 'object') return [];
+  const lines = [];
+  for (const [key, val] of Object.entries(input)) {
+    let v;
+    if (val === null || val === undefined) v = t.dim('null');
+    else if (typeof val === 'string') {
+      const trimmed = val.length > 80 ? val.slice(0, 77) + 'â€¦' : val;
+      v = t.paramVal(JSON.stringify(trimmed));
+    } else if (typeof val === 'object') {
+      v = t.paramVal(JSON.stringify(val).slice(0, 80));
+    } else {
+      v = t.paramVal(String(val));
+    }
+    lines.push(`${t.param(key)}: ${v}`);
+  }
+  return lines;
+}
+
+/**
+ * Render a tool result. Compatible with TWO calling conventions:
+ *   renderToolResult(name, result, ok = true)        // explicit
+ *   renderToolResult(result)                          // legacy: name inferred from result
+ */
+export function renderToolResult(arg1, arg2, ok = true) {
+  let name, result;
+  if (typeof arg1 === 'string') {
+    name = arg1; result = arg2;
+  } else {
+    result = arg1; name = (result && result.tool) || '';
+  }
+
+  // Detect error from result shape
+  let isOk = ok;
+  if (result && typeof result === 'object' && result.error) isOk = false;
+
+  // Find the most recent timer for this tool
+  let elapsed = '';
+  for (const [k, ts] of [..._toolTimers.entries()].reverse()) {
+    if (k.startsWith(name + ':')) {
+      elapsed = ' ' + t.dim(`(${_fmtDuration(Date.now() - ts)})`);
+      _toolTimers.delete(k);
+      break;
+    }
+  }
+
+  const sym  = isOk ? t.success('âœ“') : t.error('âœ—');
+  const verb = isOk ? 'done' : 'failed';
+  const labelName = name ? t.muted(name) + ' ' : '';
+  let summary = '';
+
+  if (isOk && result) {
+    if (typeof result === 'string') {
+      const lines = result.split('\n').length;
+      summary = t.dim(` Â· ${lines} line${lines === 1 ? '' : 's'}`);
+    } else if (typeof result === 'object') {
+      const bits = [];
+      if (result.action)       bits.push(result.action);
+      if (result.lines)        bits.push(`${result.lines} lines`);
+      else if (result.content && typeof result.content === 'string') bits.push(`${result.content.split('\n').length} lines`);
+      if (result.range && result.range !== 'full') bits.push(`range ${result.range}`);
+      if (result.matches)      bits.push(`${result.matches.length} matches`);
+      if (result.entries)      bits.push(`${result.total ?? result.entries.length} entries`);
+      if (result.bytes)        bits.push(`${_fmtBytes(result.bytes)}`);
+      if (result.bytesWritten) bits.push(`${_fmtBytes(result.bytesWritten)}`);
+      if (result.exit_code !== undefined) bits.push(`exit ${result.exit_code}`);
+      if (result.exitCode !== undefined) bits.push(`exit ${result.exitCode}`);
+      if (result.edits_applied) bits.push(`${result.edits_applied} edits`);
+      if (result.message && bits.length === 0) bits.push(truncate(String(result.message), 60));
+      if (bits.length) summary = t.dim(' Â· ' + bits.join(' Â· '));
+    }
+  } else if (!isOk && result) {
+    const err = (result.error || result.message || result);
+    summary = t.dim(' Â· ') + t.error(truncate(String(err), 80));
+  }
+
+  console.log(`  ${sym} ${labelName}${t.muted(verb)}${summary}${elapsed}\n`);
+}
+
+function _fmtDuration(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms/1000).toFixed(1)}s`;
+  return `${Math.floor(ms/60000)}m ${Math.floor((ms%60000)/1000)}s`;
+}
+
+function _fmtBytes(n) {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024*1024) return `${(n/1024).toFixed(1)}KB`;
+  return `${(n/1024/1024).toFixed(2)}MB`;
+}
+
+/**
+ * Render the approval prompt. Backwards compatible:
+ *   renderApprovalPrompt(name, input)   â€“ preferred
+ *   renderApprovalPrompt(name)          â€“ legacy (no params box)
+ */
+export function renderApprovalPrompt(name, input) {
+  const icon = toolIcon(name);
+  const verb = toolVerb(name);
+  const target = toolTarget(name, input);
+  const w = Math.min(termWidth() - 4, 88);
+
+  const headline = `${icon}  ${chalk.hex('#FCD34D').bold(verb)} ${chalk.hex('#FBBF24')(name)}`;
+  const targetLine = target
+    ? `${t.dim('target â–¸')} ${chalk.hex('#FDE68A').bold(truncate(target, w - 14))}`
+    : '';
+
+  const params = (input && typeof input === 'object')
+    ? formatParams(input).slice(0, 6).map(l => '  ' + l)
+    : [];
+
+  const sections = [headline];
+  if (targetLine) sections.push(targetLine);
+  if (params.length) sections.push('', ...params);
+
+  // Add hint line at bottom
+  sections.push('');
+  sections.push(t.dim('This action will modify your system. Review carefully.'));
+
+  const body = sections.join('\n');
+  const box = boxen(body, {
+    padding: { top: 0, bottom: 0, left: 1, right: 1 },
+    margin:  { top: 0, bottom: 0, left: 2, right: 0 },
+    borderStyle: 'round',
+    borderColor: '#F59E0B',
+    title: chalk.bgHex('#78350F').hex('#FDE68A').bold(' âš   APPROVAL REQUIRED '),
+    titleAlignment: 'left',
+    width: w,
+  });
+  console.log(box);
+
+  const yes  = chalk.bgHex('#064E3B').hex('#A7F3D0').bold(' Y ');
+  const no   = chalk.bgHex('#7F1D1D').hex('#FECACA').bold(' N ');
+  const all  = chalk.bgHex('#1E3A8A').hex('#BFDBFE').bold(' A ');
+  return `  ${chalk.hex('#FBBF24')('?')} ${t.bright('Approve?')}  ${yes} ${t.muted('yes')}   ${no} ${t.muted('no')}   ${all} ${t.muted('always')}  ${t.dim('â€º')} `;
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   USAGE / COST
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export function renderUsage({ inputTokens = 0, outputTokens = 0, cost = 0 }) {
+  const parts = [
+    `${chalk.hex('#60A5FA')('â†‘')} ${t.subtle(inputTokens.toLocaleString())} ${t.dim('in')}`,
+    `${chalk.hex('#34D399')('â†“')} ${t.subtle(outputTokens.toLocaleString())} ${t.dim('out')}`,
+    `${chalk.hex('#FBBF24')('$')} ${t.subtle(cost.toFixed(4))}`,
+  ];
+  console.log(`  ${t.dim('â””â”€')} ${parts.join(t.dim('  Â·  '))}\n`);
+}
+
+export function renderCostTable({ inputTokens, outputTokens, cost, turns, model }) {
+  const table = new Table({
+    chars: {
+      'top':'â”€','top-mid':'â”¬','top-left':'â•­','top-right':'â•®',
+      'bottom':'â”€','bottom-mid':'â”´','bottom-left':'â•°','bottom-right':'â•¯',
+      'left':'â”‚','left-mid':'â”œ','mid':'â”€','mid-mid':'â”¼',
+      'right':'â”‚','right-mid':'â”¤','middle':'â”‚',
+    },
+    style: { head: [], border: ['gray'] },
+    colWidths: [22, 30],
+  });
+  table.push(
+    [t.muted('Model'),         t.bright(model)],
+    [t.muted('Turns'),         t.bright(String(turns))],
+    [t.muted('Input tokens'),  t.accent(inputTokens.toLocaleString())],
+    [t.muted('Output tokens'), t.accent(outputTokens.toLocaleString())],
+    [t.muted('Total tokens'),  t.bright((inputTokens+outputTokens).toLocaleString())],
+    [t.muted('Estimated cost'),t.success('$' + cost.toFixed(4))],
+  );
+  console.log(table.toString());
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   STREAM RENDERER â€” markdown-aware live text printer
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export class StreamRenderer {
+  constructor() {
+    this.buffer = '';
+    this.printed = false;
+    this.inCodeBlock = false;
+    this.codeBuffer = '';
+    this.codeLang = '';
+  }
+
+  /** Feed a chunk of streamed text. Inline-format & print line by line. */
+  write(chunk) {
+    if (!chunk) return;
+    this.buffer += chunk;
+
+    // Process complete lines only
+    const idx = this.buffer.lastIndexOf('\n');
+    if (idx === -1) return;
+    const ready  = this.buffer.slice(0, idx + 1);
+    this.buffer  = this.buffer.slice(idx + 1);
+
+    for (const line of ready.split('\n').slice(0, -1)) {
+      this.printLine(line);
+    }
+  }
+
+  /** Flush any buffered text. */
+  end() {
+    if (this.buffer) { this.printLine(this.buffer); this.buffer = ''; }
+    if (this.inCodeBlock && this.codeBuffer) {
+      this.flushCodeBlock();
+    }
+    if (this.printed) console.log();
+  }
+
+  printLine(line) {
+    const fence = line.match(/^```(\w*)\s*$/);
+    if (fence) {
+      if (!this.inCodeBlock) {
+        this.inCodeBlock = true;
+        this.codeLang = fence[1] || '';
+        this.codeBuffer = '';
+      } else {
+        this.flushCodeBlock();
+        this.inCodeBlock = false;
+        this.codeLang = '';
+      }
+      this.printed = true;
+      return;
+    }
+    if (this.inCodeBlock) {
+      this.codeBuffer += line + '\n';
+      return;
+    }
+    // Skip bracket-only junk lines (common with proxy/format issues)
+    if (/^[\[\]{}\(\),;\s]*$/.test(line) && line.trim().length > 0 && line.trim().length < 10) {
+      return; // suppress
+    }
+    process.stdout.write('  ' + this.formatLine(line) + '\n');
+    this.printed = true;
+  }
+
+  flushCodeBlock() {
+    const lang = this.codeLang || 'plaintext';
+    const code = this.codeBuffer.replace(/\n$/, '');
+    let highlighted;
+    try {
+      highlighted = highlight(code, { language: lang, ignoreIllegals: true });
+    } catch {
+      highlighted = t.codeText(code);
+    }
+    const lines = highlighted.split('\n');
+    const w = termWidth() - 8;
+
+    // Window-style chrome: â— â— â—  langname
+    const dots =
+      chalk.hex('#FF5F57')('â—') + ' ' +
+      chalk.hex('#FEBC2E')('â—') + ' ' +
+      chalk.hex('#28C840')('â—');
+    const langLabel = chalk.hex('#A78BFA').bold(lang);
+    const lineCount = t.dim(`${lines.length} ln`);
+    const headInner = ` ${dots}  ${langLabel}`;
+    const padLen = Math.max(2, w - visibleLen(headInner) - visibleLen(lineCount) - 4);
+    const top    = t.dim('  â•­') + headInner + ' '.repeat(padLen) + lineCount + ' ' + t.dim('â•®');
+    const bottom = t.dim('  â•°' + 'â”€'.repeat(w + 1) + 'â•¯');
+
+    console.log(top);
+    // gutter with line numbers
+    const gutterW = String(lines.length).length;
+    lines.forEach((ln, i) => {
+      const num = t.dim(String(i + 1).padStart(gutterW, ' '));
+      console.log(t.dim('  â”‚ ') + num + t.dim(' â”‚ ') + ln);
+    });
+    console.log(bottom);
+    this.codeBuffer = '';
+  }
+
+  formatLine(line) {
+    // Headers
+    let m = line.match(/^(#{1,6})\s+(.+)$/);
+    if (m) {
+      const level = m[1].length;
+      const txt = m[2];
+      if (level === 1) return gradientText('â–Ž ' + txt, 'claude');
+      if (level === 2) return chalk.hex('#A78BFA').bold('â–Ž ' + txt);
+      if (level === 3) return chalk.hex('#7DD3FC').bold('â–¸ ' + txt);
+      return chalk.bold(txt);
+    }
+    // Bullets
+    m = line.match(/^(\s*)([-*+])\s+(.+)$/);
+    if (m) return m[1] + chalk.hex('#D97757')('â€¢') + ' ' + this.inline(m[3]);
+    // Numbered
+    m = line.match(/^(\s*)(\d+)\.\s+(.+)$/);
+    if (m) return m[1] + chalk.hex('#D97757').bold(m[2] + '.') + ' ' + this.inline(m[3]);
+    // Blockquote
+    m = line.match(/^>\s?(.*)$/);
+    if (m) return chalk.hex('#A78BFA')('â–Ž ') + t.muted(this.inline(m[1]));
+    // Horizontal rule
+    if (/^---+$/.test(line)) return gradientLine(termWidth() - 4, 'claude');
+    // Task list
+    m = line.match(/^(\s*)- \[( |x|X)\]\s+(.+)$/);
+    if (m) {
+      const checked = m[2].toLowerCase() === 'x';
+      const box = checked ? t.success('â˜‘') : t.muted('â˜');
+      const txt = checked ? chalk.strikethrough(t.muted(m[3])) : this.inline(m[3]);
+      return m[1] + box + ' ' + txt;
+    }
+
+    return this.inline(line);
+  }
+
+  inline(text) {
+    if (!text) return text;
+    // Inline code
+    text = text.replace(/`([^`]+)`/g, (_, c) => chalk.bgHex('#1F2937').hex('#FCD34D')(' ' + c + ' '));
+    // Bold
+    text = text.replace(/\*\*(.+?)\*\*/g, (_, c) => chalk.bold(c));
+    text = text.replace(/__(.+?)__/g, (_, c) => chalk.bold(c));
+    // Italic
+    text = text.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, (_, c) => chalk.italic(c));
+    text = text.replace(/(?<!_)_([^_\n]+)_(?!_)/g, (_, c) => chalk.italic(c));
+    // Strikethrough
+    text = text.replace(/~~(.+?)~~/g, (_, c) => chalk.strikethrough(c));
+    // Links [text](url)
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, txt, url) =>
+      chalk.hex('#7DD3FC').underline(txt) + t.dim(' (' + url + ')'));
+    return text;
+  }
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   BOX & TABLE HELPERS
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export function drawBox(content, opts = {}) {
+  return boxen(content, {
+    padding: 1,
+    margin: { top: 0, bottom: 1, left: 2, right: 0 },
+    borderStyle: 'round',
+    borderColor: opts.color || 'gray',
+    title: opts.title,
+    titleAlignment: opts.titleAlign || 'left',
+    width: opts.width,
+    ...opts,
+  });
+}
+
+export function renderHelpTable(rows) {
+  const table = new Table({
+    chars: {
+      'top':'â”€','top-mid':'â”¬','top-left':'â•­','top-right':'â•®',
+      'bottom':'â”€','bottom-mid':'â”´','bottom-left':'â•°','bottom-right':'â•¯',
+      'left':'â”‚','left-mid':'â”œ','mid':'â”€','mid-mid':'â”¼',
+      'right':'â”‚','right-mid':'â”¤','middle':'â”‚',
+    },
+    head: [t.toolName('Command'), t.toolName('Description')],
+    style: { head: [], border: ['gray'] },
+    colWidths: [16, 56],
+  });
+  for (const [cmd, desc] of rows) {
+    table.push([t.accent(cmd), t.text(desc)]);
+  }
+  console.log(table.toString());
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   DIFF RENDERER
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export function renderDiff(patch) {
+  if (!patch) return;
+  const lines = patch.split('\n');
+  for (const line of lines) {
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      console.log('  ' + t.muted(line));
+    } else if (line.startsWith('@@')) {
+      console.log('  ' + chalk.bgHex('#1E1B4B').hex('#A78BFA').bold(' ' + line + ' '));
+    } else if (line.startsWith('+')) {
+      console.log('  ' + chalk.bgHex('#052E16').hex('#86EFAC')(line));
+    } else if (line.startsWith('-')) {
+      console.log('  ' + chalk.bgHex('#450A0A').hex('#FCA5A5')(line));
+    } else {
+      console.log('  ' + t.diffCtx(line));
+    }
+  }
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   STATUS BAR
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export function renderStatusBar({ model, tokens, cost, mode }) {
+  const w = termWidth();
+  const left  = `  ${chalk.hex('#10B981')('â—')} ${t.muted(model)}`;
+  const right = `${t.muted('tokens')} ${t.subtle(tokens.toLocaleString())}  ${t.dim('â”‚')}  ${t.muted('cost')} ${t.success('$'+cost.toFixed(4))}  ${t.dim('â”‚')}  ${t.muted('mode')} ${mode === 'auto' ? t.warning(mode) : t.success(mode)}  `;
+  const lLen = visibleLen(left);
+  const rLen = visibleLen(right);
+  const pad  = Math.max(1, w - lLen - rLen);
+  console.log(left + ' '.repeat(pad) + right);
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   SPINNER FRAMES â€” for export usage
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export const SPINNER_CLAUDE = {
+  interval: 80,
+  frames: ['â ‹','â ™','â ¹','â ¸','â ¼','â ´','â ¦','â §','â ‡','â '].map(f => chalk.hex('#D97757')(f)),
+};
+
+export const SPINNER_PULSE = {
+  interval: 120,
+  frames: ['â—','â—“','â—‘','â—’'].map(f => chalk.hex('#A78BFA')(f)),
+};
+
+export const SPINNER_SHIMMER = {
+  interval: 90,
+  frames: [
+    chalk.hex('#D97757')('âœ¦'),
+    chalk.hex('#E8895A')('âœ§'),
+    chalk.hex('#A78BFA')('âœ¦'),
+    chalk.hex('#7DD3FC')('âœ§'),
+    chalk.hex('#A78BFA')('âœ¦'),
+    chalk.hex('#E8895A')('âœ§'),
+  ],
+};
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   CODE WRITE ANIMATION â€” plays while AI writes/edits code
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+const CODE_SYMBOLS = [
+  'const ', 'let ', 'function ', 'import ', 'export ',
+  'return ', 'if (', 'for (', 'class ', 'async ',
+  '=> {', '};', '});', '] = ', '...', '/**',
+  '<div', '</>', 'await ', 'new ', '.map(', '.then(',
+  'try {', 'catch', 'module.', 'require(',
+];
+
+const WRITE_VERBS = [
+  'Generating code', 'Writing code', 'Crafting code',
+  'Composing code', 'Building code', 'Synthesizing code',
+];
+
+export class CodeWriteAnimation {
+  constructor(toolName, filePath) {
+    this.toolName = toolName;
+    this.filePath = filePath || '';
+    this.interval = null;
+    this.frame = 0;
+    this.startTime = Date.now();
+    this.lines = [];
+    this.verb = WRITE_VERBS[Math.floor(Math.random() * WRITE_VERBS.length)];
+  }
+
+  start() {
+    const w = Math.min(termWidth() - 6, 72);
+    const shortPath = this.filePath ? shortenPath(this.filePath, 40) : '';
+
+    // Print header
+    const dots =
+      chalk.hex('#FF5F57')('â—') + ' ' +
+      chalk.hex('#FEBC2E')('â—') + ' ' +
+      chalk.hex('#28C840')('â—');
+    const langFromExt = this.filePath ? this.filePath.split('.').pop() : '';
+    const langBadge = langFromExt
+      ? chalk.bgHex('#1F2937').hex('#C084FC').bold(` ${langFromExt} `)
+      : '';
+
+    console.log();
+    console.log(t.dim('  â•­') + ` ${dots}  ${chalk.hex('#C084FC').bold(this.verb)}  ${langBadge} ` + t.dim('â”€'.repeat(Math.max(1, w - 32 - (langFromExt.length || 0)))) + t.dim('â•®'));
+    if (shortPath) {
+      console.log(t.dim('  â”‚') + `  ${t.dim('â†’')} ${chalk.hex('#FCD34D')(shortPath)}` + ' '.repeat(Math.max(1, w - visibleLen(shortPath) - 6)) + t.dim('â”‚'));
+    }
+
+    // Animated code lines
+    this.interval = setInterval(() => {
+      this.frame++;
+      const sym = CODE_SYMBOLS[this.frame % CODE_SYMBOLS.length];
+      const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
+
+      // Build a shimmer progress bar
+      const barW = Math.min(20, w - 30);
+      const pos = this.frame % (barW * 2);
+      const barChars = [];
+      for (let i = 0; i < barW; i++) {
+        const dist = Math.abs(i - (pos < barW ? pos : barW * 2 - pos));
+        if (dist === 0)      barChars.push(chalk.hex('#D97757')('â–ˆ'));
+        else if (dist === 1) barChars.push(chalk.hex('#C084FC')('â–“'));
+        else if (dist === 2) barChars.push(chalk.hex('#818CF8')('â–’'));
+        else                 barChars.push(chalk.hex('#374151')('â–‘'));
+      }
+      const bar = barChars.join('');
+
+      // Sparkle effect
+      const sparkles = ['âœ¦', 'âœ§', 'âŸ¡', 'â—‡', 'â–'];
+      const sparkle = chalk.hex('#FBBF24')(sparkles[this.frame % sparkles.length]);
+
+      // Build the status line
+      const codeSnippet = chalk.hex('#86EFAC').dim(sym);
+      const timeBit = t.dim(`${elapsed}s`);
+      const line = `  ${t.dim('â”‚')}  ${sparkle} ${bar}  ${codeSnippet} ${timeBit}`;
+
+      // Overwrite current line
+      process.stdout.clearLine?.(0);
+      process.stdout.cursorTo?.(0);
+      process.stdout.write(line);
+    }, 100);
+  }
+
+  stop() {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+    // Clear the animation line and print the closing border
+    process.stdout.clearLine?.(0);
+    process.stdout.cursorTo?.(0);
+    const w = Math.min(termWidth() - 6, 72);
+    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
+    console.log(t.dim('  â”‚') + `  ${t.success('âœ“')} ${chalk.hex('#10B981')('Complete')} ${t.dim(`in ${elapsed}s`)}`);
+    console.log(t.dim('  â•°') + t.dim('â”€'.repeat(w)) + t.dim('â•¯'));
+    console.log();
+  }
+}
+
+/** Check if a tool name is a code-writing tool */
+export function isCodeWriteTool(name) {
+  return ['write_file', 'edit_file', 'multi_edit', 'append_file'].includes(name);
+}
+
+/** Random "thinking" phrase to keep the wait friendly */
+const THINKING_PHRASES = [
+  'Thinking', 'Reasoning', 'Analyzing', 'Composing', 'Pondering',
+  'Crafting', 'Working', 'Considering', 'Reflecting', 'Planning',
+];
+export function thinkingText() {
+  const w = THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)];
+  return chalk.hex('#A78BFA').italic(`  ${w}â€¦`);
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   TABLE & KEY-VALUE RENDERERS
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export function renderTable(headers, rows) {
+  const table = new Table({
+    chars: {
+      'top':'â”€','top-mid':'â”¬','top-left':'â•­','top-right':'â•®',
+      'bottom':'â”€','bottom-mid':'â”´','bottom-left':'â•°','bottom-right':'â•¯',
+      'left':'â”‚','left-mid':'â”œ','mid':'â”€','mid-mid':'â”¼',
+      'right':'â”‚','right-mid':'â”¤','middle':'â”‚',
+    },
+    head: headers.map(h => t.toolName(h)),
+    style: { head: [], border: ['gray'] },
+  });
+  for (const row of rows) {
+    table.push(row);
+  }
+  return table.toString();
+}
+
+export function renderKeyValue(obj) {
+  const maxKeyLen = Math.max(...Object.keys(obj).map(k => k.length));
+  const lines = [];
+  for (const [key, value] of Object.entries(obj)) {
+    const pad = ' '.repeat(maxKeyLen - key.length + 1);
+    lines.push(`  ${t.dim(key)}${pad}${t.text(String(value))}`);
+  }
+  return lines.join('\n');
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   GOODBYE
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+
+export function renderGoodbye() {
+  const w = termWidth();
+  const lineW = Math.min(w - 4, 64);
+  console.log();
+  console.log('  ' + gradientLine(lineW, 'claude', 'â”'));
+  const msg = '  ' + chalk.hex('#FBBF24')('âœ¦') + ' ' +
+              gradientText('Session saved. Until next time!', 'claude') + ' ' +
+              chalk.hex('#FBBF24')('âœ¦');
+  console.log(msg);
+  console.log('  ' + gradientLine(lineW, 'claude', 'â”'));
+  console.log();
+}
+
+export default {
+  t, gradientText, gradientLine, termWidth,
+  renderBanner, renderSessionInfo, renderHelpFooter, renderDivider,
+  renderTip, renderSuccess, renderError, renderWarning, renderInfo,
+  renderToolCall, renderToolResult, renderApprovalPrompt,
+  renderUsage, renderCostTable, renderStatusBar,
+  renderDiff, renderHelpTable, renderAssistantHeader,
+  renderTable, renderKeyValue,
+  getPromptPrefix, renderPromptHeader, drawBox,
+  StreamRenderer, CodeWriteAnimation, isCodeWriteTool,
+  SPINNER_CLAUDE, SPINNER_PULSE, SPINNER_SHIMMER,
+  thinkingText, renderGoodbye,
+};
+

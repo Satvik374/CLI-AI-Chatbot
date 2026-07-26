@@ -1,0 +1,14 @@
+--- a/src/index.js
++++ b/src/index.js
+@@ -52,6 +52,10 @@ function defaultSystem(_maxTokens) {
+ You have access to tools to interact with the file system and run commands. Use them directly to complete tasks.
+ 
+ ## Available Tools
++
++- **analyze_codebase** — Analyze project structure and dependencies. Params: path (opt), depth (opt), focus (opt)
++- **generate_docs** — Generate documentation from code. Params: path (required), format (opt), output (opt)
++- **test_coverage** — Run tests and analyze coverage. Params: framework (opt), config (opt), threshold (opt)
++- **dependency_check** — Check for outdated/vulnerable dependencies. Params: path (opt), check (opt)
+ 
+ - **read_file** — Read a file's contents. Params: path (required), start_line (opt), end_line (opt)
+ - **write_file** — Create/overwrite a file. Params: path (required), content (required)

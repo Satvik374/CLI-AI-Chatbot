@@ -1,0 +1,32 @@
+# Created by autopush because this folder had no .gitignore.
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+build/
+target/
+out/
+
+# Local secrets - never commit these
+.env
+.env.*
+*.pem
+*.key

@@ -421,7 +421,7 @@ const CONFIG_DESCRIPTIONS = {
   apiKey:               'API authentication key',
   baseUrl:              'API endpoint base URL',
   model:                'AI model identifier',
-  apiFormat:            'API format (anthropic / openai)',
+  apiFormat:            'API format (anthropic / openai / gcloud)',
   maxTokens:            'Max response tokens',
   temperature:          'Sampling temperature (0-1)',
   autoApprove:          'Auto-approve tool calls',
@@ -441,12 +441,15 @@ const CONFIG_DESCRIPTIONS = {
   showLineNumbers:      'Show line numbers in output',
   fileReadLimit:        'Max lines to read from files',
   enableSounds:         'Enable sound effects',
+  gcloudProject:        'Google Cloud Project ID',
+  gcloudLocation:       'Google Cloud Region / Location',
+  gcloudAccessToken:    'Google Cloud OAuth Access Token',
   customCommands:       'User-defined slash commands',
   trustedCommands:      'Auto-approved shell commands',
 };
 
 /** Commands that should open a sub-menu instead of running directly */
-export const COMMANDS_WITH_SUBMENU = new Set(['/config', '/model', '/theme']);
+export const COMMANDS_WITH_SUBMENU = new Set(['/config', '/model', '/theme', '/gcloud']);
 
 /* ═══════════════════════════════════════════════════════════════
    SUB-MENU — generic key-value picker for config, model, theme

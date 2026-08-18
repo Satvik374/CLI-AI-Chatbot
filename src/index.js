@@ -17,6 +17,12 @@ import { processCommand }  from './commands.js';
 import ConversationHistory  from './history.js';
 import { SlashMenu, SubMenu, COMMANDS_WITH_SUBMENU } from './slashmenu.js';
 import mcpManager from './mcp.js';
+import {
+  RECOMMENDED_GCLOUD_MODELS,
+  getGCloudProject,
+  getGCloudLocation,
+  getGCloudAuthStatus,
+} from './gcloud.js';
 
 /* ──────────────────────────────────────────────
    Default system prompt
@@ -48,8 +54,6 @@ Example — read a file:
 You can call multiple tools by outputting multiple JSON code blocks in one response.
 After each tool runs, you will receive the result as a [Tool Result] message.`;
 
-  // Generate the tool list from the actual definitions so the prompt never
-  // drifts out of sync with what executeTool can run (includes MCP tools).
   const toolList = getAllToolDefinitions()
     .map(d => {
       const params = Object.entries(d.parameters?.properties || {})
@@ -84,10 +88,6 @@ ${toolCallInstructions}
 - Time: ${new Date().toISOString()}`;
 }
 
-/**
- * Persistent project memory, appended to whichever system prompt is in use
- * (including a custom one) so saved facts survive across sessions.
- */
 export function memorySection() {
   if (config.get('enableMemory') === false) return '';
   const mem = config.loadMemory().trim();
@@ -112,32 +112,49 @@ async function setupWizard() {
   const ask = (q) => new Promise(r => rl.question(q, r));
 
   // 1 — API format
-  console.log(`  ${t.dim('Choose API format:')}`);
+  console.log(`  ${t.dim('Choose API format / engine:')}`);
   console.log(`  ${t.highlight('1.')} Anthropic (Claude API)`);
   console.log(`  ${t.highlight('2.')} OpenAI-compatible (OpenRouter, LM Studio, Ollama, vLLM …)`);
+  console.log(`  ${t.highlight('3.')} Google Cloud (Vertex AI / Gcloud Gemini Models)`);
   const fmt = await ask(`  ${t.primary('Choice [1]:')} `);
-  const apiFormat = fmt.trim() === '2' ? 'openai' : 'anthropic';
+  
+  let apiFormat = 'anthropic';
+  if (fmt.trim() === '2') apiFormat = 'openai';
+  else if (fmt.trim() === '3') apiFormat = 'gcloud';
 
-  // 2 — API key
-  const key = await ask(`\n  ${t.primary('API Key:')} `);
+  let key = '';
+  let url = '';
+  let mdl = '';
 
-  // 3 — Base URL
-  const defUrl = apiFormat === 'anthropic'
-    ? 'https://api.anthropic.com' : 'https://openrouter.ai/api';
-  const url = await ask(`  ${t.primary(`Base URL [${defUrl}]:`)} `);
+  if (apiFormat === 'gcloud') {
+    const defaultProj = getGCloudProject();
+    const proj = await ask(`\n  ${t.primary(`Google Cloud Project ID${defaultProj ? ` [${defaultProj}]` : ''}:`)} `);
+    const location = await ask(`  ${t.primary('Google Cloud Region [us-central1]:')} `);
+    const token = await ask(`  ${t.primary('Gcloud Access Token (leave blank to auto-use gcloud CLI):')} `);
 
-  // 4 — Model
-  const defModel = apiFormat === 'anthropic'
-    ? 'claude-sonnet-4-20250514' : 'anthropic/claude-sonnet-4-20250514';
-  const mdl = await ask(`  ${t.primary(`Model [${defModel}]:`)} `);
+    if (proj.trim() || defaultProj) config.values.gcloudProject = proj.trim() || defaultProj;
+    config.values.gcloudLocation = location.trim() || 'us-central1';
+    if (token.trim()) config.values.gcloudAccessToken = token.trim();
+
+    mdl = await ask(`  ${t.primary('Model [gemini-2.5-flash]:')} `);
+    mdl = mdl.trim() || 'gemini-2.5-flash';
+  } else {
+    key = await ask(`\n  ${t.primary('API Key:')} `);
+    const defUrl = apiFormat === 'anthropic' ? 'https://api.anthropic.com' : 'https://openrouter.ai/api';
+    url = await ask(`  ${t.primary(`Base URL [${defUrl}]:`)} `);
+
+    const defModel = apiFormat === 'anthropic' ? 'claude-sonnet-4-20250514' : 'anthropic/claude-sonnet-4-20250514';
+    mdl = await ask(`  ${t.primary(`Model [${defModel}]:`)} `);
+    mdl = mdl.trim() || defModel;
+    url = url.trim() || defUrl;
+  }
 
   rl.close();
 
-  // Batch all config changes, save once
   config.values.apiFormat = apiFormat;
   if (key.trim()) config.values.apiKey = key.trim();
-  config.values.baseUrl = url.trim() || defUrl;
-  config.values.model = mdl.trim() || defModel;
+  if (url) config.values.baseUrl = url;
+  if (mdl) config.values.model = mdl;
   config.save();
   renderSuccess('Configuration saved!');
 }
@@ -221,7 +238,7 @@ async function streamOneTurn(messages, systemPrompt) {
           break;
 
         case 'tool_end':
-          toolCalls.push({ id: ev.id, name: ev.name, input: ev.input });
+          toolCalls.push({ id: ev.id, name: ev.name, input: ev.input, signature: ev.signature });
           break;
 
         case 'truncated':
@@ -517,7 +534,7 @@ async function processUserMessage(ctx) {
   // Rebuilt each turn so facts saved mid-conversation are visible on the next one
   const systemPrompt = (config.get('systemPrompt') || defaultSystem(ms)) + memorySection();
   let iterations = 0;
-  const MAX_ITERATIONS = 25;
+  const MAX_ITERATIONS = config.get('maxToolCalls') || Infinity;
   let nudgeCount = 0;            // track how many times we nudged (cap at 3)
   const recentToolCalls = new Map();  // track tool signatures to detect infinite loops
 
@@ -578,7 +595,7 @@ async function processUserMessage(ctx) {
       const assistantContent = [];
       if (text) assistantContent.push({ type: 'text', text });
       for (const tc of toolCalls)
-        assistantContent.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
+        assistantContent.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input, signature: tc.signature });
       if (assistantContent.length)
         ctx.history.addMessage('assistant', assistantContent);
     } else {
@@ -629,8 +646,8 @@ async function processUserMessage(ctx) {
       const sig = tc.name + ':' + JSON.stringify(tc.input);
       const count = (recentToolCalls.get(sig) || 0) + 1;
       recentToolCalls.set(sig, count);
-      if (READ_TOOLS.has(tc.name) && count > 1) {
-        renderWarning(`Skipping duplicate ${tc.name} call (already read this).`);
+      if (READ_TOOLS.has(tc.name) && count > 10) {
+        renderWarning(`Skipping duplicate ${tc.name} call (already read 10 times).`);
         results.push({ toolId: tc.id, name: tc.name, result: {
           error: 'Duplicate call skipped — this exact result is already in the conversation above. Do not repeat it; continue with the task.',
         } });
@@ -961,14 +978,18 @@ export async function main() {
   /** Handle model sub-menu */
   async function handleModelSubMenu() {
     const models = [
+      { key: 'gemini-3.6-flash',            value: 'Google — flagship Gemini 3.6 fast & smart', desc: 'Next-gen flagship fast Gemini text model' },
+      { key: 'gemini-3.5-flash',            value: 'Google — high speed Gemini 3.5', desc: 'High performance low latency Gemini 3.5 model' },
+      { key: 'gemini-3.5-flash-lite',       value: 'Google — ultra lightweight Gemini 3.5', desc: 'Super fast lightweight Gemini 3.5 model' },
+      { key: 'gemini-2.5-pro',              value: 'Google — flagship Gemini 2.5 reasoning', desc: 'Flagship reasoning & multi-modal model' },
+      { key: 'gemini-2.5-flash',            value: 'Google — high performance Gemini 2.5', desc: 'High-speed Gemini 2.5 model' },
+      { key: 'gemini-2.0-flash',            value: 'Google — fast & smart general model', desc: 'Fast, highly reliable Gemini 2.0 model' },
+      { key: 'claude-3-7-sonnet@20250219',  value: 'Vertex AI — Claude 3.7 Sonnet', desc: 'Anthropic Claude 3.7 on Google Cloud Vertex' },
       { key: 'claude-sonnet-4-20250514',    value: 'Anthropic — flagship coding', desc: 'Best balance of speed and intelligence' },
       { key: 'claude-opus-4-20250514',      value: 'Anthropic — most powerful', desc: 'Most capable model, slower' },
       { key: 'claude-3-5-sonnet-20241022',  value: 'Anthropic — fast & smart', desc: 'Previous gen flagship' },
-      { key: 'claude-3-5-haiku-20241022',   value: 'Anthropic — fastest', desc: 'Ultra-fast, lighter model' },
       { key: 'gpt-4o',                      value: 'OpenAI — flagship', desc: 'OpenAI flagship model' },
-      { key: 'gpt-4o-mini',                 value: 'OpenAI — fast & cheap', desc: 'Budget-friendly option' },
       { key: 'deepseek-chat',               value: 'DeepSeek — high value', desc: 'Strong and affordable' },
-      { key: 'deepseek-coder',              value: 'DeepSeek — code-focused', desc: 'Optimized for coding' },
     ];
     // Highlight current model
     const current = config.get('model');
@@ -981,6 +1002,53 @@ export async function main() {
       config.save();
       console.log();
       renderSuccess(`Model set to ${picked.key}`);
+    }
+  }
+
+  /** Handle gcloud sub-menu */
+  async function handleGCloudSubMenu() {
+    const items = [
+      { key: 'Status', value: 'Check Google Cloud Auth & Project status', desc: 'Shows project, location, account & token health' },
+      { key: 'Use Gcloud Format', value: 'Switch apiFormat to gcloud', desc: 'Activates Google Cloud Vertex AI API engine' },
+      { key: 'Select Gemini / Gcloud Model', value: 'Choose text model', desc: 'Pick Gemini 3.6 Flash, 3.5 Flash, 2.5 Pro, Claude on Vertex...' },
+      { key: 'Set Project ID', value: getGCloudProject() || '(not set)', desc: 'Configure Google Cloud Project ID' },
+      { key: 'Set Region', value: getGCloudLocation(), desc: 'Configure Google Cloud region (default us-central1)' },
+      { key: 'Set Access Token', value: config.get('gcloudAccessToken') ? 'Custom token set' : 'Auto via gcloud CLI', desc: 'Set explicit OAuth access token' },
+      { key: 'Login Help', value: 'Authentication instructions', desc: 'How to run gcloud auth login' },
+    ];
+    const picked = await subMenu.openPicker(items, 'Google Cloud');
+    if (!picked) return;
+
+    if (picked.key === 'Status') {
+      await processCommand('/gcloud status', ctx);
+    } else if (picked.key === 'Use Gcloud Format') {
+      await processCommand('/gcloud use', ctx);
+    } else if (picked.key === 'Select Gemini / Gcloud Model') {
+      await handleModelSubMenu();
+    } else if (picked.key === 'Set Project ID') {
+      const val = await subMenu.openEditor('gcloudProject', getGCloudProject(), 'Google Cloud Project ID');
+      if (val !== null) {
+        config.set('gcloudProject', val);
+        config.save();
+        renderSuccess(`Google Cloud Project set to ${val}`);
+      }
+    } else if (picked.key === 'Set Region') {
+      const val = await subMenu.openEditor('gcloudLocation', getGCloudLocation(), 'Google Cloud Region (e.g. us-central1)');
+      if (val !== null) {
+        config.set('gcloudLocation', val);
+        config.save();
+        renderSuccess(`Google Cloud Location set to ${val}`);
+      }
+    } else if (picked.key === 'Set Access Token') {
+      const val = await subMenu.openEditor('gcloudAccessToken', config.get('gcloudAccessToken') || '', 'Google Cloud Access Token (ya29...)');
+      if (val !== null) {
+        config.set('gcloudAccessToken', val);
+        config.set('apiFormat', 'gcloud');
+        config.save();
+        renderSuccess('Google Cloud access token set and apiFormat changed to gcloud.');
+      }
+    } else if (picked.key === 'Login Help') {
+      await processCommand('/gcloud login', ctx);
     }
   }
 
@@ -1022,6 +1090,8 @@ export async function main() {
           await handleConfigSubMenu();
         } else if (selected === '/model') {
           await handleModelSubMenu();
+        } else if (selected === '/gcloud') {
+          await handleGCloudSubMenu();
         } else if (selected === '/theme') {
           await handleThemeSubMenu();
         } else {

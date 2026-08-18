@@ -6,6 +6,15 @@ import { readFileSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { executeEnhancedTool } from './enhanced_tools.js';
+import {
+  getGCloudAuthStatus,
+  getGCloudProject,
+  getGCloudLocation,
+  getGCloudAccessToken,
+  refreshGCloudToken,
+  saveGCloudCredentialsObj,
+  RECOMMENDED_GCLOUD_MODELS,
+} from './gcloud.js';
 
 /* ──────────────────────────────────────────────
    Version from package.json
@@ -28,7 +37,8 @@ export const COMMANDS = {
   '/compact' : { desc: 'Compact conversation to save context',   handler: cmdCompact },
   '/config'  : { desc: 'View or set a config key',               handler: cmdConfig },
   '/model'   : { desc: 'View or change the model',               handler: cmdModel },
-  '/models'  : { desc: 'List recommended models',                handler: cmdModels },
+  '/models'  : { desc: 'List recommended models (Gemini, Claude, GPT)', handler: cmdModels },
+  '/gcloud'  : { desc: 'Google Cloud Auth, Project, Region & Models setup', handler: cmdGCloud },
   '/cost'    : { desc: 'Show session token / cost usage',        handler: cmdCost },
   '/auto'    : { desc: 'Toggle auto-approve for tool calls',     handler: cmdAuto },
   '/yolo'    : { desc: 'Toggle YOLO mode (auto-approve all)',    handler: cmdYolo },
@@ -164,22 +174,135 @@ function cmdModel(args) {
 
 function cmdModels() {
   console.log();
-  console.log(t.bold('  🧠 Recommended Models'));
-  console.log(t.dim('  ──────────────────────'));
+  console.log(t.bold('  🧠 Recommended Models (Google Cloud Gemini, Anthropic, OpenAI)'));
+  console.log(t.dim('  ─────────────────────────────────────────────────────────────'));
   const models = [
-    ['claude-sonnet-4-20250514',         'Anthropic — flagship coding'],
-    ['claude-opus-4-20250514',           'Anthropic — most powerful'],
-    ['claude-3-5-sonnet-20241022',       'Anthropic — fast & smart'],
-    ['claude-3-5-haiku-20241022',        'Anthropic — fastest'],
+    ['gemini-3.6-flash',                 'Google — flagship Gemini 3.6 fast & smart'],
+    ['gemini-3.5-flash',                 'Google — high speed Gemini 3.5'],
+    ['gemini-3.5-flash-lite',            'Google — ultra lightweight Gemini 3.5'],
+    ['gemini-2.5-pro',                   'Google — flagship Gemini 2.5 reasoning'],
+    ['gemini-2.5-flash',                 'Google — high performance Gemini 2.5'],
+    ['gemini-2.0-flash',                 'Google — fast & smart general model'],
+    ['claude-3-7-sonnet@20250219',       'Vertex AI — Claude 3.7 Sonnet on Gcloud'],
+    ['claude-sonnet-4-20250514',         'Anthropic API — flagship coding'],
+    ['claude-3-5-sonnet-20241022',       'Anthropic API — fast & smart'],
     ['gpt-4o',                            'OpenAI — flagship'],
-    ['gpt-4o-mini',                       'OpenAI — fast & cheap'],
     ['deepseek-chat',                     'DeepSeek — high value'],
-    ['deepseek-coder',                    'DeepSeek — code-focused'],
   ];
   console.log(renderTable(['Model ID', 'Notes'], models.map(([m, n]) => [t.accent(m), t.dim(n)])));
   console.log();
   console.log(t.dim('  Use ') + t.codeKw('/model <id>') + t.dim(' to switch.'));
   console.log();
+  return { handled: true };
+}
+
+async function cmdGCloud(args) {
+  const sub = (args[0] || 'status').toLowerCase();
+  const rest = args.slice(1).join(' ').trim();
+
+  switch (sub) {
+    case 'status': {
+      const status = getGCloudAuthStatus();
+      console.log();
+      console.log(gradientText('  ☁  GOOGLE CLOUD STATUS', ['#4285F4', '#34A853']));
+      console.log();
+      console.log(renderKeyValue({
+        'Authenticated': status.authenticated ? t.success('✓ Connected') : t.warning('✗ Not Authenticated'),
+        'Account':       status.account || '—',
+        'Project ID':    status.project || t.warning('(not set)'),
+        'Location':      status.location,
+        'Token Source':  status.tokenSource,
+        'API Format':    config.get('apiFormat') === 'gcloud' ? t.success('gcloud (active)') : config.get('apiFormat'),
+        'Active Model':  config.get('model'),
+      }));
+      console.log();
+      console.log(t.dim('  Subcommands: status, use, login, project <id>, location <region>, token <token>, models'));
+      console.log();
+      break;
+    }
+    case 'use':
+    case 'enable': {
+      config.set('apiFormat', 'gcloud');
+      const proj = getGCloudProject();
+      if (!proj) {
+        renderWarning('API format set to gcloud. Note: Google Cloud Project ID is not set yet. Set it using: /gcloud project <project-id>');
+      } else {
+        renderSuccess(`API format switched to ${t.accent('gcloud')} (Project: ${t.accent(proj)}).`);
+      }
+      break;
+    }
+    case 'login': {
+      renderInfo('Google Cloud Authentication setup:');
+      renderInfo('If gcloud CLI is installed, authenticate in your terminal by running:');
+      console.log(t.codeKw('  gcloud auth application-default login'));
+      console.log(t.codeKw('  gcloud auth login'));
+      renderInfo('Or set your Google Cloud Access Token directly:');
+      console.log(t.codeKw('  /gcloud token <your-access-token>'));
+      break;
+    }
+    case 'token': {
+      if (!rest) {
+        const token = getGCloudAccessToken();
+        if (token) {
+          renderSuccess(`Current Access Token: ${t.accent(token.slice(0, 15) + '••••••••' + token.slice(-5))}`);
+        } else {
+          renderWarning('No Google Cloud access token found.');
+        }
+      } else if (rest.startsWith('{')) {
+        try {
+          const credsObj = JSON.parse(rest);
+          saveGCloudCredentialsObj(credsObj);
+          renderSuccess(`Google Cloud Authorized User credentials JSON loaded! (Project: ${t.accent(getGCloudProject())})`);
+        } catch (err) {
+          renderError('Invalid credentials JSON: ' + err.message);
+        }
+      } else {
+        config.set('gcloudAccessToken', rest);
+        config.set('apiFormat', 'gcloud');
+        config.save();
+        refreshGCloudToken();
+        renderSuccess('Google Cloud access token updated and apiFormat set to gcloud.');
+      }
+      break;
+    }
+    case 'project': {
+      if (!rest) {
+        renderInfo(`Current Google Cloud Project: ${t.accent(getGCloudProject() || '(not set)')}`);
+      } else {
+        config.set('gcloudProject', rest);
+        config.save();
+        renderSuccess(`Google Cloud Project set to ${t.accent(rest)}`);
+      }
+      break;
+    }
+    case 'location':
+    case 'region': {
+      if (!rest) {
+        renderInfo(`Current Google Cloud Location: ${t.accent(getGCloudLocation())}`);
+      } else {
+        config.set('gcloudLocation', rest);
+        config.save();
+        renderSuccess(`Google Cloud Location set to ${t.accent(rest)}`);
+      }
+      break;
+    }
+    case 'models': {
+      console.log();
+      console.log(gradientText('  🤖 GOOGLE CLOUD & GEMINI TEXT AI MODELS', ['#4285F4', '#EA4335']));
+      console.log(t.dim('  ──────────────────────────────────────────────'));
+      const rows = RECOMMENDED_GCLOUD_MODELS.map(m => [t.accent(m.id), t.bold(m.name), t.dim(m.desc)]);
+      console.log(renderTable(['Model ID', 'Name', 'Description'], rows));
+      console.log();
+      console.log(t.dim('  Use ') + t.codeKw('/model <model-id>') + t.dim(' to switch to any model.'));
+      console.log();
+      break;
+    }
+    default: {
+      renderError(`Unknown subcommand: ${sub}`);
+      renderInfo('Available: status, use, login, project, location, token, models');
+    }
+  }
+
   return { handled: true };
 }
 
@@ -411,7 +534,7 @@ function cmdStatus(_, ctx) {
   console.log();
   const a = ctx?.api;
   const h = ctx?.history;
-  console.log(renderKeyValue({
+  const statusObj = {
     'Model':         config.get('model'),
     'API Format':    config.get('apiFormat'),
     'Base URL':      config.get('baseUrl'),
@@ -423,7 +546,12 @@ function cmdStatus(_, ctx) {
     'Input tokens':  a?.totalInputTokens.toLocaleString() ?? 0,
     'Output tokens': a?.totalOutputTokens.toLocaleString() ?? 0,
     'Total cost':    '$' + (a?.totalCost.toFixed(4) ?? '0.0000'),
-  }));
+  };
+  if (config.get('apiFormat') === 'gcloud') {
+    statusObj['Gcloud Project']  = getGCloudProject() || '(not set)';
+    statusObj['Gcloud Location'] = getGCloudLocation();
+  }
+  console.log(renderKeyValue(statusObj));
   console.log();
   return { handled: true };
 }

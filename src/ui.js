@@ -548,7 +548,7 @@ export function renderTurnHeader(role) {
 export function renderUserMessage(text) {
   const lines = wrapText(text, termWidth() - 10);
   lines.forEach(line => {
-    console.log(`  ${chalk.hex('#60A5FA')('┃')}  ${t.text(line)}`);
+    console.log(`  ${chalk.hex('#60A5FA')('│')}  ${t.bright(line)}`);
   });
 }
 
@@ -940,7 +940,9 @@ export class StreamRenderer {
     this.codeBuffer = '';
     this.codeLang = '';
     this.inThinkingBlock = false;
-    this.consecutiveBlankLines = 0;  // Track blank lines to prevent gaps
+    this.inTable = false;
+    this.tableLines = [];
+    this.consecutiveBlankLines = 0;
   }
 
   /** Feed a chunk of streamed text. Inline-format & print line by line. */
@@ -965,6 +967,9 @@ export class StreamRenderer {
     if (this.inCodeBlock && this.codeBuffer) {
       this.flushCodeBlock();
     }
+    if (this.inTable && this.tableLines.length) {
+      this.flushTable();
+    }
     if (this.printed) console.log();
   }
 
@@ -977,10 +982,10 @@ export class StreamRenderer {
         this.inThinkingBlock = true;
         isThinkingLine = true;
         renderLine = renderLine.replace('<think>', '');
-        process.stdout.write(`  ${chalk.hex('#6B7280')('┃')}  ${chalk.dim.italic('🤔 Thinking...')}\n`);
+        process.stdout.write(`  ${chalk.hex('#6B7280')('│')} ${chalk.hex('#A78BFA').italic('🤔 Thinking...')}\n`);
         this.printed = true;
       }
-      
+
       if (renderLine.includes('</think>')) {
         this.inThinkingBlock = false;
         isThinkingLine = true;
@@ -994,6 +999,7 @@ export class StreamRenderer {
 
     const fence = renderLine.match(/^```(\w*)\s*$/);
     if (fence) {
+      if (this.inTable) this.flushTable();
       if (!this.inCodeBlock) {
         this.inCodeBlock = true;
         this.codeLang = fence[1] || '';
@@ -1010,25 +1016,66 @@ export class StreamRenderer {
       this.codeBuffer += renderLine + '\n';
       return;
     }
+
+    // Markdown Table detection (lines starting and ending with |)
+    const isTableLine = /^\s*\|.*\|\s*$/.test(renderLine);
+    if (isTableLine) {
+      this.inTable = true;
+      this.tableLines.push(renderLine);
+      return;
+    } else if (this.inTable) {
+      this.flushTable();
+    }
+
     // Skip bracket-only junk lines
     if (/^[\[\]{}\(\),;\s]*$/.test(renderLine) && renderLine.trim().length > 0 && renderLine.trim().length < 10) {
       return;
     }
 
-    const pipeColor = isThinkingLine ? '#6B7280' : '#D97757';
-
-    // Collapse consecutive blank lines — allow max 1 empty pipe line
+    // Collapse consecutive blank lines — allow max 1 empty line
     if (!renderLine.trim()) {
       this.consecutiveBlankLines++;
-      if (this.consecutiveBlankLines > 1) return;  // Skip extra blank lines
-      process.stdout.write(`  ${chalk.hex(pipeColor)('┃')}\n`);
+      if (this.consecutiveBlankLines > 1) return;
+      process.stdout.write('\n');
       this.printed = true;
       return;
     }
     this.consecutiveBlankLines = 0;
 
-    const formatted = isThinkingLine ? chalk.dim(renderLine) : this.formatLine(renderLine);
-    process.stdout.write(`  ${chalk.hex(pipeColor)('┃')}  ${formatted}\n`);
+    if (isThinkingLine) {
+      process.stdout.write(`  ${chalk.hex('#6B7280')('│')} ${chalk.dim(renderLine)}\n`);
+    } else {
+      const formatted = this.formatLine(renderLine);
+      process.stdout.write(`  ${formatted}\n`);
+    }
+    this.printed = true;
+  }
+
+  flushTable() {
+    if (!this.tableLines.length) return;
+    const lines = [...this.tableLines];
+    this.tableLines = [];
+    this.inTable = false;
+
+    const rows = lines.map(l =>
+      l.split('|').slice(1, -1).map(c => c.trim())
+    ).filter(r => r.length > 0 && !r.every(c => /^:?-+:?$/.test(c)));
+
+    if (!rows.length) return;
+
+    const headers = rows[0];
+    const bodyRows = rows.slice(1);
+
+    try {
+      const tableStr = renderTable(headers, bodyRows.map(r => r.map(c => this.inline(c))));
+      for (const tLine of tableStr.split('\n')) {
+        console.log(`  ${tLine}`);
+      }
+    } catch {
+      for (const raw of lines) {
+        console.log(`  ${this.inline(raw)}`);
+      }
+    }
     this.printed = true;
   }
 
@@ -1038,30 +1085,27 @@ export class StreamRenderer {
 
     // Hide tool call code blocks
     if (lang.toLowerCase() === 'json' || lang === 'plaintext') {
-      // Try parsing with smart-quote sanitization
       let parsed = null;
-      try { parsed = JSON.parse(code); } catch { /* fallback below */ }
+      try { parsed = JSON.parse(code); } catch {}
       if (!parsed) {
-        // Sanitize smart/curly quotes
         const sanitized = code
           .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')
           .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")
           .replace(/[\u2013\u2014]/g, '-')
           .replace(/\u2026/g, '...');
-        try { parsed = JSON.parse(sanitized); } catch { /* still not valid */ }
+        try { parsed = JSON.parse(sanitized); } catch {}
       }
 
       if (parsed) {
         const isToolCall = Array.isArray(parsed)
           ? parsed.some(p => p && (p.type === 'tool_use' || (p.name && (p.input || p.arguments))))
           : (parsed && (parsed.type === 'tool_use' || (parsed.name && (parsed.input || parsed.arguments))));
-        
+
         if (isToolCall) {
           this.codeBuffer = '';
           return;
         }
       } else {
-        // Final fallback: regex check — if the code looks like a tool call JSON, hide it
         const looksLikeToolCall = /^\s*[\[{]/.test(code) &&
           /"name"\s*:\s*"(?:write_file|read_file|edit_file|run_command|search_files|list_directory|multi_edit|delete_file|append_file|create_directory|move_file|copy_file|analyze_codebase|generate_docs|test_coverage|dependency_check|code_quality)"/.test(code) &&
           /"(?:input|arguments)"\s*:/.test(code);
@@ -1079,9 +1123,13 @@ export class StreamRenderer {
       highlighted = t.codeText(code);
     }
     const lines = highlighted.split('\n');
-    const w = termWidth() - 8;
+    const gutterW = String(lines.length).length;
+    const rawLines = code.split('\n');
+    const maxLineLen = Math.max(...rawLines.map(l => visibleLen(l)));
+    const termW = termWidth();
+    const boxW = Math.max(48, Math.min(termW - 8, Math.max(maxLineLen + gutterW + 10, 64)));
 
-    // Window-style chrome: ● ● ●  langname
+    // Header chrome with window control buttons
     const dots =
       chalk.hex('#FF5F57')('●') + ' ' +
       chalk.hex('#FEBC2E')('●') + ' ' +
@@ -1089,16 +1137,17 @@ export class StreamRenderer {
     const langLabel = chalk.hex('#A78BFA').bold(lang);
     const lineCount = t.dim(`${lines.length} ln`);
     const headInner = ` ${dots}  ${langLabel}`;
-    const padLen = Math.max(2, w - visibleLen(headInner) - visibleLen(lineCount) - 4);
-    const top    = t.dim('  ╭') + headInner + ' '.repeat(padLen) + lineCount + ' ' + t.dim('╮');
-    const bottom = t.dim('  ╰' + '─'.repeat(w + 1) + '╯');
+    const fillTop = Math.max(2, boxW - visibleLen(headInner) - visibleLen(lineCount) - 4);
+
+    const top    = t.dim('  ╭─') + headInner + t.dim(' ' + '─'.repeat(fillTop) + ' ') + lineCount + t.dim('─╮');
+    const bottom = t.dim('  ╰─' + '─'.repeat(boxW - 4) + '─╯');
 
     console.log(top);
-    // gutter with line numbers
-    const gutterW = String(lines.length).length;
     lines.forEach((ln, i) => {
       const num = t.dim(String(i + 1).padStart(gutterW, ' '));
-      console.log(t.dim('  │ ') + num + t.dim(' │ ') + ln);
+      const codeLen = visibleLen(ln);
+      const pad = ' '.repeat(Math.max(0, boxW - codeLen - gutterW - 8));
+      console.log(t.dim('  │ ') + num + t.dim(' │ ') + ln + pad + t.dim(' │'));
     });
     console.log(bottom);
     this.codeBuffer = '';
@@ -1109,9 +1158,10 @@ export class StreamRenderer {
     let m = line.match(/^(#{1,6})\s+(.+)$/);
     if (m) {
       const level = m[1].length;
-      const txt = m[2];
-      if (level === 1) return gradientText('▎ ' + txt, 'claude');
-      if (level === 2) return chalk.hex('#A78BFA').bold('▎ ' + txt);
+      const cleanTxt = m[2].replace(/^[█▓▸]\s*/, '');
+      const txt = this.inline(cleanTxt);
+      if (level === 1) return chalk.hex('#D97757').bold('█ ' + txt);
+      if (level === 2) return chalk.hex('#A78BFA').bold('▓ ' + txt);
       if (level === 3) return chalk.hex('#7DD3FC').bold('▸ ' + txt);
       return chalk.bold(txt);
     }
@@ -1120,10 +1170,10 @@ export class StreamRenderer {
     if (m) return m[1] + chalk.hex('#D97757')('•') + ' ' + this.inline(m[3]);
     // Numbered
     m = line.match(/^(\s*)(\d+)\.\s+(.+)$/);
-    if (m) return m[1] + chalk.hex('#D97757').bold(m[2] + '.') + ' ' + this.inline(m[3]);
+    if (m) return m[1] + chalk.hex('#A78BFA').bold(m[2] + '.') + ' ' + this.inline(m[3]);
     // Blockquote
     m = line.match(/^>\s?(.*)$/);
-    if (m) return chalk.hex('#A78BFA')('▎ ') + t.muted(this.inline(m[1]));
+    if (m) return chalk.hex('#A78BFA')('│ ') + t.muted(this.inline(m[1]));
     // Horizontal rule
     if (/^---+$/.test(line)) return gradientLine(termWidth() - 4, 'claude');
     // Task list
@@ -1140,19 +1190,23 @@ export class StreamRenderer {
 
   inline(text) {
     if (!text) return text;
-    // Inline code
-    text = text.replace(/`([^`]+)`/g, (_, c) => chalk.bgHex('#1F2937').hex('#FCD34D')(' ' + c + ' '));
-    // Bold
-    text = text.replace(/\*\*(.+?)\*\*/g, (_, c) => chalk.bold(c));
-    text = text.replace(/__(.+?)__/g, (_, c) => chalk.bold(c));
-    // Italic
-    text = text.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, (_, c) => chalk.italic(c));
-    text = text.replace(/(?<!_)_([^_\n]+)_(?!_)/g, (_, c) => chalk.italic(c));
-    // Strikethrough
-    text = text.replace(/~~(.+?)~~/g, (_, c) => chalk.strikethrough(c));
-    // Links [text](url)
-    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, txt, url) =>
-      chalk.hex('#7DD3FC').underline(txt) + t.dim(' (' + url + ')'));
+    // 1. Inline code: `code`
+    text = text.replace(/`([^`]+)`/g, (_, c) =>
+      chalk.bgHex('#1F2937').hex('#FCD34D')(` ${c.trim()} `)
+    );
+    // 2. Bold: **bold** or __bold__
+    text = text.replace(/(\*\*|__)(.*?)\1/g, (_, __, c) => chalk.bold(c));
+    // 3. Italic: *italic* or _italic_
+    text = text.replace(/(\*|_)(.*?)\1/g, (_, __, c) => chalk.italic(c));
+    // 4. Strikethrough: ~~text~~
+    text = text.replace(/~~(.*?)~~/g, (_, c) => chalk.strikethrough(c));
+    // 5. Links: [text](url)
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, txt, url) => {
+      if (url.startsWith('file://') || url.startsWith('http')) {
+        return chalk.hex('#7DD3FC').underline(txt) + t.dim(` (${url})`);
+      }
+      return chalk.hex('#7DD3FC').underline(txt);
+    });
     return text;
   }
 }

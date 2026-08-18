@@ -1,11 +1,12 @@
 import config from './config.js';
+import { getGCloudAccessToken, getGCloudProject, getGCloudLocation, refreshGCloudToken } from './gcloud.js';
 
 /**
- * Unified API client that supports both Anthropic Messages API
- * and OpenAI-compatible Chat Completions API.
+ * Unified API client that supports Anthropic Messages API,
+ * OpenAI-compatible Chat Completions API, and Google Cloud (Vertex AI / Gemini) API.
  *
  * Handles:
- *  - Standard SSE streaming (Anthropic & OpenAI)
+ *  - Standard SSE streaming (Anthropic, OpenAI & Gemini)
  *  - Non-streaming JSON responses (common with reverse proxies)
  *  - Proxy responses that embed Anthropic JSON in text content
  *
@@ -30,9 +31,11 @@ class APIClient {
     const explicit = config.get('nativeTools');
     if (explicit === true) return true;
     if (explicit === false) return false;
-    // Auto-detect: only official APIs support native tools
+    // Auto-detect: official APIs and Gcloud support native tools
+    const fmt = this._format();
+    if (fmt === 'gcloud' || fmt === 'vertex' || fmt === 'google') return true;
     const base = (config.get('baseUrl') || '').toLowerCase();
-    return base.includes('api.anthropic.com') || base.includes('api.openai.com');
+    return base.includes('api.anthropic.com') || base.includes('api.openai.com') || base.includes('googleapis.com');
   }
 
   /* ─── public ─── */
@@ -59,10 +62,23 @@ class APIClient {
    */
   async *stream(messages, tools, systemPrompt) {
     const format = this._format();
+    const model = (config.get('model') || '').toLowerCase();
 
-    const body = format === 'anthropic'
-      ? this._buildAnthropicBody(messages, tools, systemPrompt)
-      : this._buildOpenAIBody(messages, tools, systemPrompt);
+    let body;
+    if (format === 'gcloud' || format === 'vertex' || format === 'google') {
+      if (model.includes('claude')) {
+        body = this._buildAnthropicBody(messages, tools, systemPrompt);
+        body.anthropic_version = 'vertex-2023-10-16';
+      } else if (model.includes('gemini') || model.startsWith('code-')) {
+        body = this._buildGeminiBody(messages, tools, systemPrompt);
+      } else {
+        body = this._buildOpenAIBody(messages, tools, systemPrompt);
+      }
+    } else if (format === 'anthropic') {
+      body = this._buildAnthropicBody(messages, tools, systemPrompt);
+    } else {
+      body = this._buildOpenAIBody(messages, tools, systemPrompt);
+    }
 
     this._abortController = new AbortController();
 
@@ -85,12 +101,34 @@ class APIClient {
 
     if (!res.ok) {
       const errText = await res.text();
+      if (res.status === 401 && (format === 'gcloud' || format === 'vertex' || format === 'google')) {
+        refreshGCloudToken();
+        throw new Error(
+          `Google Cloud authentication failed (401 Unauthorized).\n` +
+          `Your Google Cloud OAuth token may be missing or expired.\n\n` +
+          `To fix this:\n` +
+          `1. Open terminal and run: gcloud auth application-default login\n` +
+          `2. Or set your access token directly: /gcloud token <your-oauth-token>\n` +
+          `3. Or if using Google AI Studio API key (AIza...): set it via /gcloud token <AIza...>`
+        );
+      }
+      if (res.status === 404 && (format === 'gcloud' || format === 'vertex' || format === 'google')) {
+        throw new Error(
+          `Google Cloud Model Not Found (404).\n` +
+          `Model "${config.get('model')}" is not available on Vertex AI in region "${getGCloudLocation()}" for project "${getGCloudProject()}".\n\n` +
+          `Recommended Working Google Cloud Models:\n` +
+          `  • /model gemini-2.5-flash  (Verified Working on Vertex AI)\n` +
+          `  • /model gemini-2.5-pro    (Verified Working on Vertex AI)\n` +
+          `  • /model claude-3-7-sonnet@20250219 (Claude on Vertex AI)\n` +
+          `  • Or use a Google AI Studio API key (AIza...): /gcloud token <AIza...>`
+        );
+      }
       throw new Error(`API ${res.status}: ${errText.slice(0, 400)}`);
     }
 
     /* ─── Detect response type ─── */
     const contentType = res.headers.get('content-type') || '';
-    const isSSE = contentType.includes('text/event-stream');
+    const isSSE = contentType.includes('text/event-stream') || endpoint.includes('alt=sse');
 
     if (debug) {
       console.error(`[DEBUG] Response Content-Type: ${contentType}`);
@@ -149,8 +187,8 @@ class APIClient {
         }
       }
 
-      // Force flush any incomplete tool calls (SSE stream ended without proper close)
-      if (format === 'anthropic') {
+      // Force flush any incomplete tool calls
+      if (format === 'anthropic' || (format.includes('gcloud') && model.includes('claude'))) {
         for (const b of contentBlocks) {
           if (b?.type === 'tool_use' && !b._done) {
             try { b.input = JSON.parse(b._json || '{}'); } catch { b.input = {}; }
@@ -158,7 +196,7 @@ class APIClient {
             yield { type: 'tool_end', id: b.id, name: b.name, input: b.input };
           }
         }
-      } else {
+      } else if (format === 'openai' || (format.includes('gcloud') && !model.includes('gemini') && !model.includes('claude'))) {
         for (const tc of Object.values(oaiToolCalls)) {
           if (tc.name && !tc._done) {
             try { tc.input = JSON.parse(tc.args || '{}'); } catch { tc.input = {}; }
@@ -168,10 +206,6 @@ class APIClient {
           }
         }
       }
-
-      // Also try to parse the ENTIRE collected buffer as a non-SSE response
-      // (some proxies set content-type to event-stream but return plain JSON)
-      // This is handled by the fallback in _processNonStreamingResponse
     }
 
     this._abortController = null;
@@ -215,15 +249,10 @@ class APIClient {
       json = JSON.parse(rawBody);
       if (debug) {
         console.error(`[DEBUG] Parsed as JSON. Keys: ${Object.keys(json).join(', ')}`);
-        if (json.content) console.error(`[DEBUG] content blocks: ${json.content.length}, types: ${json.content.map(b => b.type).join(', ')}`);
-        if (json.choices) console.error(`[DEBUG] choices: ${json.choices.length}`);
       }
     } catch {
-      // Sometimes the proxy returns SSE-formatted text even without proper content-type
-      // Try to extract data: lines
       const dataLines = rawBody.split('\n').filter(l => l.startsWith('data:'));
       if (dataLines.length > 0) {
-        // It's actually SSE, just with wrong content-type — process each line
         const contentBlocks = [];
         const oaiToolCalls  = {};
         let inTok = 0, outTok = 0;
@@ -236,33 +265,16 @@ class APIClient {
           }
         }
         if (inTok || outTok) yield { type: 'meta_usage', inputTokens: inTok, outputTokens: outTok };
-        // Flush incomplete tool calls
-        if (format === 'anthropic') {
-          for (const b of contentBlocks) {
-            if (b?.type === 'tool_use' && !b._done) {
-              try { b.input = JSON.parse(b._json || '{}'); } catch { b.input = {}; }
-              b._done = true;
-              yield { type: 'tool_end', id: b.id, name: b.name, input: b.input };
-            }
-          }
-        } else {
-          for (const tc of Object.values(oaiToolCalls)) {
-            if (tc.name && !tc._done) {
-              try { tc.input = JSON.parse(tc.args || '{}'); } catch { tc.input = {}; }
-              tc._done = true;
-              if (!tc.id) tc.id = 'call_' + Math.random().toString(36).slice(2, 9);
-              yield { type: 'tool_end', id: tc.id, name: tc.name, input: tc.input };
-            }
-          }
-        }
         return;
       }
       throw new Error('API returned non-JSON response: ' + rawBody.slice(0, 300));
     }
 
-    // Handle Anthropic non-streaming response format
-    if (format === 'anthropic') {
+    const model = (config.get('model') || '').toLowerCase();
+    if (format === 'anthropic' || (format.includes('gcloud') && model.includes('claude'))) {
       yield* this._parseAnthropicFullResponse(json);
+    } else if (format.includes('gcloud') && (model.includes('gemini') || model.startsWith('code-'))) {
+      yield* this._parseGeminiFullResponse(json);
     } else {
       yield* this._parseOpenAIFullResponse(json);
     }
@@ -270,7 +282,6 @@ class APIClient {
 
   /* Parse a complete Anthropic API response (non-streaming) */
   *_parseAnthropicFullResponse(json) {
-    // Could be wrapped: { message: { content: [...] } } or direct: { content: [...] }
     const msg = json.message || json;
     const content = msg.content || [];
 
@@ -289,6 +300,31 @@ class APIClient {
     const usage = msg.usage || json.usage;
     if (usage) {
       yield { type: 'meta_usage', inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0 };
+    }
+  }
+
+  /* Parse a complete Gemini API response (non-streaming) */
+  *_parseGeminiFullResponse(json) {
+    const candidate = json.candidates?.[0] || (Array.isArray(json) ? json[0]?.candidates?.[0] : null);
+    if (!candidate) return;
+
+    const parts = candidate.content?.parts || [];
+    for (const part of parts) {
+      if (part.text) {
+        yield { type: 'text', text: part.text };
+      }
+      if (part.functionCall) {
+        const name = part.functionCall.name;
+        const id = 'call_' + Math.random().toString(36).slice(2, 9);
+        yield { type: 'tool_start', name, id };
+        yield { type: 'tool_end', id, name, input: part.functionCall.args || {} };
+      }
+    }
+
+    if (candidate.finishReason === 'MAX_TOKENS') yield { type: 'truncated' };
+    const usage = json.usageMetadata || json[0]?.usageMetadata;
+    if (usage) {
+      yield { type: 'meta_usage', inputTokens: usage.promptTokenCount || 0, outputTokens: usage.candidatesTokenCount || 0 };
     }
   }
 
@@ -316,7 +352,6 @@ class APIClient {
       }
     }
 
-    // Detect truncation
     if (choice.finish_reason === 'length') {
       yield { type: 'truncated' };
     }
@@ -327,19 +362,70 @@ class APIClient {
      ────────────────────────────────────────────── */
 
   _endpoint() {
+    const fmt = this._format();
+    if (fmt === 'gcloud' || fmt === 'vertex' || fmt === 'google') {
+      const proj = getGCloudProject();
+      const loc = getGCloudLocation();
+      const model = config.get('model');
+      const token = getGCloudAccessToken();
+
+      if (token && token.startsWith('AIza')) {
+        if (model.toLowerCase().includes('claude')) {
+          return `https://api.anthropic.com/v1/messages`;
+        }
+        return `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${token}&alt=sse`;
+      }
+
+      if (!proj) {
+        throw new Error('Google Cloud Project ID not set. Set it via /gcloud project <project-id> or set GCLOUD_PROJECT env var.');
+      }
+      const host = (!loc || loc === 'global')
+        ? 'aiplatform.googleapis.com'
+        : `${loc}-aiplatform.googleapis.com`;
+
+      if (model.toLowerCase().includes('claude')) {
+        return `https://${host}/v1/projects/${proj}/locations/${loc || 'global'}/publishers/anthropic/models/${model}:streamRawPredict`;
+      }
+      if (model.toLowerCase().includes('gemini') || model.startsWith('code-')) {
+        return `https://${host}/v1/projects/${proj}/locations/${loc || 'global'}/publishers/google/models/${model}:streamGenerateContent?alt=sse`;
+      }
+      return `https://${host}/v1beta1/projects/${proj}/locations/${loc || 'global'}/endpoints/openapi/chat/completions`;
+    }
+
     let base = config.get('baseUrl').replace(/\/+$/, '');
-    // Strip known endpoint suffixes users might accidentally include
     base = base.replace(/\/v1\/(messages|chat\/completions)$/i, '');
     base = base.replace(/\/v1$/i, '');
     base = base.replace(/\/+$/, '');
 
-    return this._format() === 'anthropic'
+    return fmt === 'anthropic'
       ? `${base}/v1/messages`
       : `${base}/v1/chat/completions`;
   }
 
   _headers() {
-    if (this._format() === 'anthropic') {
+    const fmt = this._format();
+    if (fmt === 'gcloud' || fmt === 'vertex' || fmt === 'google') {
+      const token = getGCloudAccessToken();
+      if (!token) {
+        throw new Error(
+          'No Google Cloud access token available.\n' +
+          'Run "gcloud auth application-default login" or "gcloud auth login" in terminal,\n' +
+          'or set your token directly using: /gcloud token <access-token>'
+        );
+      }
+      if (token.startsWith('AIza')) {
+        return {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': token,
+        };
+      }
+      return {
+        'Content-Type' : 'application/json',
+        'Authorization': `Bearer ${token}`,
+      };
+    }
+
+    if (fmt === 'anthropic') {
       return {
         'Content-Type'     : 'application/json',
         'x-api-key'        : config.get('apiKey'),
@@ -358,11 +444,6 @@ class APIClient {
      Private — request body builders
      ────────────────────────────────────────────── */
 
-  /**
-   * Anthropic requires strictly alternating user/assistant roles.
-   * Error turns and fallback tool extraction can leave consecutive same-role
-   * messages in history — merge them here so every request stays valid.
-   */
   _mergeConsecutiveRoles(messages) {
     const out = [];
     const toBlocks = c => Array.isArray(c) ? c : [{ type: 'text', text: String(c) }];
@@ -372,7 +453,6 @@ class APIClient {
       const prev = out[out.length - 1];
       if (prev && prev.role === m.role) {
         const merged = [...toBlocks(prev.content), ...toBlocks(m.content)];
-        // tool_result blocks must come before text blocks in a user message
         prev.content = [
           ...merged.filter(b => b.type === 'tool_result'),
           ...merged.filter(b => b.type !== 'tool_result'),
@@ -393,7 +473,6 @@ class APIClient {
       messages  : this._mergeConsecutiveRoles(messages),
     };
     if (systemPrompt) body.system = systemPrompt;
-    // Only send tools if native tool calling is supported
     if (nativeTools && tools?.length) {
       body.tools = tools.map(t => ({
         name: t.name, description: t.description, input_schema: t.parameters,
@@ -405,6 +484,83 @@ class APIClient {
     return body;
   }
 
+  _buildGeminiBody(messages, tools, systemPrompt) {
+    const nativeTools = this._useNativeTools();
+    const contents = [];
+
+    for (const m of messages) {
+      const role = m.role === 'assistant' ? 'model' : 'user';
+
+      if (typeof m.content === 'string') {
+        contents.push({ role, parts: [{ text: m.content }] });
+        continue;
+      }
+
+      if (Array.isArray(m.content)) {
+        const parts = [];
+        for (const c of m.content) {
+          if (c.type === 'text' && c.text) {
+            parts.push({ text: c.text });
+          } else if (c.type === 'tool_use') {
+            const partObj = {
+              functionCall: {
+                name: c.name,
+                args: c.input || {},
+              },
+            };
+            if (c.signature || c.thought_signature) {
+              partObj.thought_signature = c.signature || c.thought_signature;
+            }
+            parts.push(partObj);
+          } else if (c.type === 'tool_result') {
+            const resContent = typeof c.content === 'string' ? c.content : JSON.stringify(c.content);
+            parts.push({
+              functionResponse: {
+                name: c.tool_name || 'tool',
+                response: { output: resContent },
+              },
+            });
+          }
+        }
+        if (parts.length > 0) {
+          contents.push({ role, parts });
+        }
+      }
+    }
+
+    const body = {
+      contents,
+      generationConfig: {
+        maxOutputTokens: Math.min(config.get('maxTokens') || 8192, 65535),
+      },
+    };
+
+    const temp = config.get('temperature');
+    if (typeof temp === 'number') {
+      body.generationConfig.temperature = temp;
+    }
+
+    if (systemPrompt) {
+      body.systemInstruction = {
+        parts: [{ text: systemPrompt }],
+      };
+    }
+
+    if (nativeTools && tools?.length) {
+      body.tools = [
+        {
+          functionDeclarations: tools.map(t => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters,
+          })),
+        },
+      ];
+    }
+
+    return body;
+  }
+
   _buildOpenAIBody(messages, tools, systemPrompt) {
     const msgs = [];
     const nativeTools = this._useNativeTools();
@@ -412,7 +568,6 @@ class APIClient {
     if (systemPrompt) msgs.push({ role: 'system', content: systemPrompt });
 
     for (const m of messages) {
-      /* user tool-result messages → convert to plain text if native tools disabled */
       if (m.role === 'user' && Array.isArray(m.content)) {
         const trs = m.content.filter(c => c.type === 'tool_result');
         if (trs.length) {
@@ -421,7 +576,6 @@ class APIClient {
               msgs.push({ role: 'tool', tool_call_id: tr.tool_use_id,
                            content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content) });
           } else {
-            // Convert to plain text for proxies that don't support tool role
             const textParts = trs.map(tr => {
               const content = typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content);
               return `[Tool Result]\n${content}`;
@@ -432,7 +586,6 @@ class APIClient {
         }
       }
 
-      /* assistant with tool_use blocks → convert to plain text if native tools disabled */
       if (m.role === 'assistant' && Array.isArray(m.content)) {
         const textParts = m.content.filter(c => c.type === 'text');
         const toolParts = m.content.filter(c => c.type === 'tool_use');
@@ -446,7 +599,6 @@ class APIClient {
             }));
           msgs.push(fmsg);
         } else {
-          // Convert to plain text
           let txt = textParts.map(p => p.text).join('');
           if (toolParts.length) {
             const toolTexts = toolParts.map(tp =>
@@ -469,7 +621,6 @@ class APIClient {
       messages  : msgs,
     };
 
-    // Only send tools in body if native tool calling is enabled
     if (nativeTools && tools?.length) {
       body.tools = tools.map(t => ({
         type: 'function',
@@ -500,10 +651,17 @@ class APIClient {
     let inputTokens = 0;
     let outputTokens = 0;
 
-    if (format === 'anthropic') {
-      // Check if the proxy returned the ENTIRE response as a single SSE event
+    const isGCloud = format === 'gcloud' || format === 'vertex' || format === 'google';
+    const currentModel = (config.get('model') || '').toLowerCase();
+
+    if (isGCloud && (currentModel.includes('gemini') || currentModel.startsWith('code-'))) {
+      for (const ev of this._procGemini(evt)) events.push(ev);
+      if (evt.usageMetadata) {
+        inputTokens  = evt.usageMetadata.promptTokenCount     || 0;
+        outputTokens = evt.usageMetadata.candidatesTokenCount || 0;
+      }
+    } else if (format === 'anthropic' || (isGCloud && currentModel.includes('claude'))) {
       if (evt.content && Array.isArray(evt.content) && !evt.type) {
-        // This is a full Anthropic response, not an SSE event
         for (const block of evt.content) {
           if (block.type === 'text' && block.text) {
             events.push({ type: 'text', text: block.text });
@@ -519,7 +677,6 @@ class APIClient {
           outputTokens = evt.usage.output_tokens || 0;
         }
       } else {
-        // Normal Anthropic SSE event
         for (const ev of this._procAnthropic(evt, contentBlocks)) events.push(ev);
         if (evt.type === 'message_start' && evt.message?.usage)
           inputTokens = evt.message.usage.input_tokens || 0;
@@ -540,6 +697,29 @@ class APIClient {
   /* ──────────────────────────────────────────────
      Private — SSE processors (generators)
      ────────────────────────────────────────────── */
+
+  *_procGemini(evt) {
+    const candidate = evt.candidates?.[0];
+    if (!candidate) return;
+
+    const parts = candidate.content?.parts || [];
+    for (const part of parts) {
+      if (part.text) {
+        yield { type: 'text', text: part.text };
+      }
+      if (part.functionCall) {
+        const name = part.functionCall.name;
+        const id = 'call_' + Math.random().toString(36).slice(2, 9);
+        const signature = part.thought_signature || part.thoughtSignature || part.functionCall?.thought_signature;
+        yield { type: 'tool_start', name, id };
+        yield { type: 'tool_end', id, name, input: part.functionCall.args || {}, signature };
+      }
+    }
+
+    if (candidate.finishReason === 'MAX_TOKENS') {
+      yield { type: 'truncated' };
+    }
+  }
 
   *_procAnthropic(evt, blocks) {
     switch (evt.type) {
@@ -606,7 +786,6 @@ class APIClient {
       }
     }
 
-    // Detect truncation due to max_tokens
     if (choice.finish_reason === 'length') {
       yield { type: 'truncated' };
     }
@@ -618,7 +797,7 @@ class APIClient {
 
   _cost(inp, out) {
     const m = config.get('model').toLowerCase();
-    let iC = 3, oC = 15;                       // defaults (Sonnet-tier)
+    let iC = 3, oC = 15;
     if (m.includes('haiku'))                    { iC = 0.25; oC = 1.25; }
     else if (m.includes('opus'))                { iC = 15;   oC = 75;   }
     else if (m.includes('sonnet'))              { iC = 3;    oC = 15;   }
@@ -626,6 +805,7 @@ class APIClient {
     else if (m.includes('gpt-4'))               { iC = 10;   oC = 30;   }
     else if (m.includes('gpt-3.5'))             { iC = 0.5;  oC = 1.5;  }
     else if (m.includes('deepseek'))            { iC = 0.14; oC = 0.28; }
+    else if (m.includes('gemini-3'))            { iC = 0.4;  oC = 1.2;  }
     else if (m.includes('gemini'))              { iC = 0.5;  oC = 1.5;  }
     else if (m.includes('mistral') || m.includes('mixtral')) { iC = 0.6; oC = 2.0;  }
     else if (m.includes('llama'))               { iC = 0.5;  oC = 1.0;  }
@@ -637,3 +817,4 @@ class APIClient {
 
 export const api = new APIClient();
 export default api;
+

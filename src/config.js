@@ -40,6 +40,10 @@ const DEFAULTS = {
   customCommands: {},           // user-defined slash commands
   trustedCommands: ['ls','dir','pwd','cat','type','echo','node --version','npm --version','git status','git log','git diff'],
   yoloMode: false,
+  gcloudProject: '',
+  gcloudLocation: 'global',
+  gcloudAccessToken: '',
+  maxToolCalls: Infinity,
 };
 
 class Config {
@@ -56,6 +60,16 @@ class Config {
     if (!this.values.apiKey) {
       if (process.env.ANTHROPIC_API_KEY) { this.values.apiKey = process.env.ANTHROPIC_API_KEY; this.values.apiFormat = 'anthropic'; }
       else if (process.env.OPENAI_API_KEY) { this.values.apiKey = process.env.OPENAI_API_KEY; this.values.apiFormat = 'openai'; }
+      else if (process.env.GCLOUD_ACCESS_TOKEN || process.env.GOOGLE_ACCESS_TOKEN) {
+        this.values.gcloudAccessToken = process.env.GCLOUD_ACCESS_TOKEN || process.env.GOOGLE_ACCESS_TOKEN;
+        this.values.apiFormat = 'gcloud';
+      }
+    }
+    if (process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT) {
+      this.values.gcloudProject = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+    }
+    if (process.env.GCLOUD_LOCATION || process.env.GOOGLE_CLOUD_LOCATION) {
+      this.values.gcloudLocation = process.env.GCLOUD_LOCATION || process.env.GOOGLE_CLOUD_LOCATION;
     }
     if (process.env.MORALTA_API_KEY)     this.values.apiKey  = process.env.MORALTA_API_KEY;
     if (process.env.MORALTA_BASE_URL)    this.values.baseUrl = process.env.MORALTA_BASE_URL;
@@ -85,6 +99,9 @@ class Config {
       apiKey: this.values.apiKey,
       baseUrl: this.values.baseUrl,
       apiFormat: this.values.apiFormat,
+      gcloudProject: this.values.gcloudProject,
+      gcloudLocation: this.values.gcloudLocation,
+      gcloudAccessToken: this.values.gcloudAccessToken,
     };
     this.values = { ...DEFAULTS, ...keep };
     this.save();
@@ -126,7 +143,12 @@ class Config {
   get sessionsDir() { return SESSIONS_DIR; }
   get memoryFile()  { return this._memoryPath(); }
   get mcpConfigFile() { return MCP_CONFIG_FILE; }
-  get isConfigured() { return !!this.values.apiKey; }
+  get isConfigured() {
+    if (this.values.apiFormat === 'gcloud') {
+      return true; // gcloud token can be auto-retrieved via CLI or env
+    }
+    return !!this.values.apiKey || !!this.values.gcloudAccessToken;
+  }
 
   /** Load MCP server configurations from disk */
   loadMCPServers() {
